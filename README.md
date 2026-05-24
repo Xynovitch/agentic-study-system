@@ -283,3 +283,9 @@ interleaved** prior-week items, plus feedback that traces reasoning rather than 
 
 Python 3.13 · FastAPI + Uvicorn · pymupdf · Anthropic / OpenAI SDKs · Ollama · marked.js +
 mermaid.js (vendored). No frontend build step.
+
+---
+
+## License
+
+Released under the [MIT License](LICENSE).
