@@ -1,0 +1,51 @@
+# Agentic Study System — LLM routing map
+#
+# Each agent declares the ENGINE it runs on and the MODEL to use.
+#   engine: "api"    -> the cloud "Heavy Lifter" (provider chosen by API_PROVIDER in .env)
+#   engine: "ollama" -> the local "Fast Chatter"
+#
+# This single file is the deterministic router table. Change a model here and the
+# whole system follows — no code edits required.
+
+# Default model per API provider (used when an agent's model is "auto").
+api_models:
+  anthropic: claude-opus-4-7
+  openai: gpt-4o
+
+# Per-agent routing. temperature is intentionally low for analytical agents
+# (determinism) and higher for the conversational pupil.
+agents:
+  # --- Phase 1: Knowledge Synthesis ---
+  ingestion:
+    engine: api
+    model: auto
+    temperature: 0.3
+    max_images: 10            # cap slide page-images sent per tier (cost control)
+  web_explorer:
+    engine: api
+    model: auto
+    temperature: 0.4
+
+  # --- Phase 2: Retention ---
+  quiz:
+    engine: api
+    model: auto
+    temperature: 0.4
+  grader:
+    engine: api
+    model: auto
+    temperature: 0.2
+
+  # --- Phase 3: Review ---
+  socratic_dismantler:        # Agent A — adversarial, must be sharp -> API
+    engine: api
+    model: auto
+    temperature: 0.4
+  feynman_pupil:              # Agent B — rapid chat loop -> local Ollama
+    engine: ollama
+    model: qwen2.5:7b         # swap to qwen3:30b for a tougher pupil
+    temperature: 0.7
+
+# Bounded re-prompt loop for deterministic rule enforcement.
+validation:
+  max_retries: 2

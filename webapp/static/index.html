@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Agentic Study System</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <header>
+    <h1>📚 Agentic Study System</h1>
+    <span id="provider" class="pill"></span>
+  </header>
+
+  <main>
+    <!-- LEFT: library -->
+    <section id="sidebar">
+      <div id="dropzone">
+        <strong>Drop PDFs here</strong>
+        <span>or click to choose · they land in the inbox</span>
+        <input type="file" id="fileinput" accept="application/pdf" multiple hidden />
+      </div>
+
+      <h2>Inbox <span id="inbox-count" class="count"></span></h2>
+      <ul id="inbox" class="list"></ul>
+
+      <h2>Curriculum</h2>
+      <ul id="weeks" class="list"></ul>
+    </section>
+
+    <!-- RIGHT: viewer / chat -->
+    <section id="content">
+      <div id="tabs">
+        <button data-view="viewer" class="tab active">Viewer</button>
+        <button data-view="chat" class="tab">Feynman Chat</button>
+        <button id="open-diagnostic" class="tab ghost">Diagnostic.md</button>
+      </div>
+
+      <div id="viewer" class="view active">
+        <div id="viewer-title" class="muted">Select a material on the left to view its notes, quiz, or critique.</div>
+        <article id="viewer-body" class="markdown"></article>
+      </div>
+
+      <div id="chat" class="view">
+        <div id="chat-header" class="muted">Pick a week and start a Feynman chat.</div>
+        <div id="chat-log"></div>
+        <form id="chat-form">
+          <input id="chat-input" type="text" placeholder="Teach the pupil… (/done to end)" autocomplete="off" disabled />
+          <button id="chat-send" type="submit" disabled>Send</button>
+        </form>
+      </div>
+    </section>
+  </main>
+
+  <div id="toast"></div>
+
+  <!-- Markdown + diagram rendering, vendored locally (works fully offline).
+       app.js falls back to <pre> if these ever fail to load. -->
+  <script src="/static/vendor/marked.min.js"></script>
+  <script src="/static/vendor/mermaid.min.js"></script>
+  <script src="/static/app.js"></script>
+</body>
+</html>

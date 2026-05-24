@@ -1,0 +1,23 @@
+# Agentic Study System — dependencies
+# API engines (provider-agnostic router supports either/both)
+anthropic>=0.39
+openai>=1.40
+
+# Local engine
+ollama>=0.3
+
+# PDF ingestion (Phase 1): text extraction + page->image rendering
+pymupdf>=1.24
+
+# Config + environment
+pyyaml>=6.0
+python-dotenv>=1.0
+
+# Web exploration sub-agent (Phase 1)
+requests>=2.31
+
+# Web interface (the study launcher)
+fastapi>=0.110
+uvicorn[standard]>=0.29
+python-multipart>=0.0.9
+
