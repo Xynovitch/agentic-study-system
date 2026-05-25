@@ -39,6 +39,24 @@ def _encode_image(path: Path | str) -> tuple[str, str]:
     return base64.b64encode(p.read_bytes()).decode("ascii"), media
 
 
+def _api_error_hint(provider: str, exc: Exception) -> str:
+    """Turn a raw SDK exception into an actionable one-liner."""
+    msg = str(exc).lower()
+    portal = ("platform.openai.com/account/billing" if provider == "OpenAI"
+              else "console.anthropic.com")
+    if "insufficient_quota" in msg or "exceeded your current quota" in msg:
+        return (f"{provider} account has no available quota/credits. "
+                f"Add billing at {portal}, then retry.")
+    if "rate limit" in msg or "429" in msg:
+        return f"{provider} rate limit hit. Wait a moment and retry."
+    if "invalid_api_key" in msg or "incorrect api key" in msg or "401" in msg \
+            or "authentication" in msg:
+        return f"{provider} API key is invalid. Check the key in .env."
+    if "model" in msg and ("not found" in msg or "does not exist" in msg):
+        return f"{provider} model not available to this account. Pick another in config.yaml."
+    return f"{provider} API error: {exc}"
+
+
 class LLMError(RuntimeError):
     """Raised for configuration / connectivity problems with a fix hint."""
 
@@ -93,13 +111,16 @@ class LLMRouter:
                 ) from exc
             self._anthropic = anthropic.Anthropic(api_key=self.settings.anthropic_api_key)
 
-        resp = self._anthropic.messages.create(
-            model=model,
-            max_tokens=max_tokens,
-            temperature=temperature,
-            system=system or "",
-            messages=self._to_anthropic(messages),
-        )
+        try:
+            resp = self._anthropic.messages.create(
+                model=model,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                system=system or "",
+                messages=self._to_anthropic(messages),
+            )
+        except Exception as exc:  # noqa: BLE001 - surface a clean hint
+            raise LLMError(_api_error_hint("Anthropic", exc)) from exc
         return "".join(block.text for block in resp.content if block.type == "text")
 
     @staticmethod
@@ -140,12 +161,15 @@ class LLMRouter:
         # OpenAI carries the system prompt as the first message.
         full = ([{"role": "system", "content": system}] if system else []) \
             + self._to_openai(messages)
-        resp = self._openai.chat.completions.create(
-            model=model,
-            temperature=temperature,
-            max_tokens=max_tokens,
-            messages=full,
-        )
+        try:
+            resp = self._openai.chat.completions.create(
+                model=model,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                messages=full,
+            )
+        except Exception as exc:  # noqa: BLE001 - surface a clean hint
+            raise LLMError(_api_error_hint("OpenAI", exc)) from exc
         return resp.choices[0].message.content or ""
 
     @staticmethod
