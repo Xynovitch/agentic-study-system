@@ -12,6 +12,7 @@ Usage:
     python main.py review  --week 1 [--subject S] [--essay P]  # Agent A: Socratic Dismantler
     python main.py feynman --week 1 [--subject S] [--model M]  # Agent B: Feynman Pupil
     python main.py ingest  --week 1 [--subject S]              # Phase 1: synthesize tiered notes
+    python main.py explore --week 1 [--subject S]              # Phase 1: fetch reference diagrams
     python main.py quiz    --week 1 [--subject S]              # Phase 2: build quiz + answers
     python main.py grade   --week 1 [--subject S]              # Phase 2: grade your answers
 """
@@ -87,6 +88,17 @@ def cmd_ingest(args, settings, router) -> int:
     return 0
 
 
+def cmd_explore(args, settings, router) -> int:
+    from agents.web_explorer import WebExplorer
+
+    lib = _library(settings, args.subject)
+    agent = WebExplorer(settings, router)
+    print(f"🔎 Searching Wikimedia Commons for Week {args.week} diagrams …")
+    r = agent.enrich_week(lib.week_dir(args.week), args.week)
+    print(f"✅ Wrote {r['path']}  ({r['count']} image(s) for: {', '.join(r['concepts'])})")
+    return 0
+
+
 def cmd_quiz(args, settings, router) -> int:
     from agents.quiz_agent import QuizAgent
 
@@ -148,6 +160,10 @@ def build_parser() -> argparse.ArgumentParser:
     i = sub.add_parser("ingest", help="Phase 1: synthesize tiered notes (stub)")
     add_week(i)
     i.set_defaults(func=cmd_ingest)
+
+    e = sub.add_parser("explore", help="Phase 1: fetch reference diagrams (Wikimedia Commons)")
+    add_week(e)
+    e.set_defaults(func=cmd_explore)
 
     q = sub.add_parser("quiz", help="Phase 2: build a tiered quiz (+ Answers template)")
     add_week(q)

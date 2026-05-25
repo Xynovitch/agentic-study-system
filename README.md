@@ -128,7 +128,7 @@ Agentic Study/
 │   ├── feynman_pupil.py       # Phase 3 Agent B — teach-back chat      (implemented)
 │   ├── quiz_agent.py          # Phase 2 — tiered quiz + interleaving  (implemented)
 │   ├── grader_agent.py        # Phase 2 — traced feedback             (implemented)
-│   └── web_explorer.py        # Phase 1 diagram search                (stub)
+│   └── web_explorer.py        # Phase 1 — Wikimedia Commons diagrams  (implemented)
 │
 ├── prompts/                   # per-agent system prompts (rules encoded in prose)
 │
@@ -208,6 +208,7 @@ Same agents, no browser. Week commands take `--subject SLUG|NAME` (default: the 
 
 ```bash
 python main.py ingest  --week 1                       # Phase 1: PDFs → tiered notes
+python main.py explore --week 1                       # Phase 1: fetch reference diagrams (Commons)
 python main.py quiz    --week 1                       # Phase 2: build quiz + answers template
 python main.py grade   --week 1                       # Phase 2: trace-grade your answers
 python main.py review  --week 1 [--subject "Intro to CS"]   # Phase 3 Agent A (essay auto-located)
@@ -256,7 +257,10 @@ validation:
 Parses each week's PDFs into text **and** rendered page images (`core/pdf_parser.py`), then asks
 the vision API to produce three tier files (`Beginner.md`, `Intermediate.md`, `Advanced.md`).
 Each tier is held to the synthesis rules (worked-example-first, a Mermaid diagram, Korean terms in
-parentheses, tier-appropriate depth) via the re-prompt loop.
+parentheses, tier-appropriate depth) via the re-prompt loop. The **Web Explorer**
+(`agents/web_explorer.py`) optionally enriches a week: it derives diagram queries from the notes
+and pulls CC-licensed images from **Wikimedia Commons** into `assets/`, writing a `Diagrams.md`
+with captions, license, and source links (best-effort — Mermaid still covers Dual Coding offline).
 
 **Phase 2 — Retention** (`agents/quiz_agent.py`, `grader_agent.py`)
 The **Quiz Agent** generates a tiered quiz from the Phase 1 notes (Beginner: MCQ/cloze/definitions
@@ -303,7 +307,7 @@ write your Advanced essay (saved to `Essay.md` for Phase 3 Review).
 | Modify weeks (rename · move/delete PDFs · merge · delete week) | ✅ implemented |
 | Hybrid router (Anthropic / OpenAI / Ollama, multimodal) | ✅ implemented |
 | Deterministic validators + re-prompt loop | ✅ implemented |
-| Web image search for diagrams | 🚧 TODO (Mermaid covers Dual Coding meanwhile) |
+| Web image search for diagrams (Wikimedia Commons → `Diagrams.md`) | ✅ implemented |
 
 ---
 

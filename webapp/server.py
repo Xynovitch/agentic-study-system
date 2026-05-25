@@ -140,6 +140,16 @@ async def get_week_file(week: int, name: str) -> str:
     return path.read_text(encoding="utf-8")
 
 
+@app.get("/api/week/{week}/asset/{name}")
+async def get_week_asset(week: int, name: str) -> FileResponse:
+    """Serve a downloaded image from a week's assets/ (so Diagrams.md renders)."""
+    _safe_name(name)
+    path = get_library().week_dir(week) / "assets" / name
+    if not path.exists():
+        raise HTTPException(404, f"asset {name} not found for Week {week:02d}")
+    return FileResponse(path)
+
+
 # --------------------------------------------------------------------- upload
 @app.post("/api/upload")
 async def upload(files: list[UploadFile] = File(...), week: str = Form("inbox")) -> dict:
@@ -310,6 +320,26 @@ async def quiz(payload: dict) -> JSONResponse:
         "quiz": result.quiz_path.name,
         "answers": result.answers_path.name,
         "interleaved": result.interleaved,
+    })
+
+
+@app.post("/api/explore")
+async def explore(payload: dict) -> JSONResponse:
+    from agents.web_explorer import WebExplorer
+
+    week = int(payload["week"])
+    agent = WebExplorer(settings, router)
+    try:
+        result = await asyncio.to_thread(
+            agent.enrich_week, get_library().week_dir(week), week
+        )
+    except (FileNotFoundError, ValueError) as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+    return JSONResponse({
+        "week": week,
+        "file": result["path"].name,
+        "count": result["count"],
+        "concepts": result["concepts"],
     })
 
 

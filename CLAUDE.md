@@ -56,7 +56,10 @@ These are checked in code by `core/validators.py` and re-prompted via
 ## Workflow
 1. **Phase 1 — Synthesis** (`ingest --week N` / Ingest button): parse `Week_NN/input/*.pdf`
    (text + rendered page images) → three tiered notes via the vision API. **Implemented.**
-   Real web image search for diagrams is still TODO; Mermaid satisfies Dual Coding meanwhile.
+   `explore --week N` / the **Diagrams** button runs the Web Explorer: it picks diagram queries
+   from the notes (LLM, with a heading fallback) and pulls CC-licensed images from **Wikimedia
+   Commons** into `assets/`, writing `Diagrams.md`. Best-effort — Mermaid still covers Dual Coding
+   if offline. **Implemented.**
 2. **Phase 2 — Retention** (`quiz --week N`, then `grade --week N` / Quiz tab): tiered quiz
    (MCQ/cloze → application/logic → essay prompt) with a 20%-interleaved review section
    (`require_interleaving`); writes `Quiz.md` + a blank `Answers.md`. The grader writes
@@ -91,7 +94,7 @@ so the orchestrator's context window stays small. Keep it that way when extendin
 ## Layout
 ```
 core/      config, llm_router (multimodal), base_agent, validators, pdf_parser, state, library
-agents/    ingestion, quiz, grader, socratic_dismantler, feynman_pupil (live) · web_explorer (stub)
+agents/    ingestion, web_explorer (Commons diagrams), quiz, grader, socratic_dismantler, feynman_pupil
 prompts/   per-agent system prompts (rules encoded in prose)
 webapp/    server.py (FastAPI) + static/ (index.html, app.js, style.css)
 study/inbox/                   shared drop-zone for new PDFs

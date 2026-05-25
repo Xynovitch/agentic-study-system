@@ -21,10 +21,13 @@ agents:
     model: auto
     temperature: 0.3
     max_images: 10            # cap slide page-images sent per tier (cost control)
-  web_explorer:
+  web_explorer:                # picks diagram queries via api; images via Wikimedia Commons
     engine: api
     model: auto
     temperature: 0.4
+    per_concept: 1             # images downloaded per concept
+    max_concepts: 4            # concepts pulled from a week's notes
+    timeout: 15               # seconds per Commons/image HTTP call
 
   # --- Phase 2: Retention ---
   quiz:

@@ -38,6 +38,7 @@ class WeekInfo:
     has_feedback: bool = False
     has_essay: bool = False
     has_critique: bool = False
+    has_diagrams: bool = False
 
     def to_dict(self) -> dict:
         return {
@@ -51,6 +52,7 @@ class WeekInfo:
             "has_feedback": self.has_feedback,
             "has_essay": self.has_essay,
             "has_critique": self.has_critique,
+            "has_diagrams": self.has_diagrams,
         }
 
 
@@ -133,6 +135,7 @@ class Library:
         has_feedback = (wdir / "Feedback.md").exists()
         has_essay = (wdir / "Essay.md").exists()
         has_critique = (wdir / "Critique.md").exists()
+        has_diagrams = (wdir / "Diagrams.md").exists()
 
         if has_critique:
             status = "Reviewed"
@@ -149,7 +152,7 @@ class Library:
             week=week, status=status, title=self.read_meta(week).get("title", ""),
             pdfs=pdfs, tiers=tiers,
             has_quiz=has_quiz, has_answers=has_answers, has_feedback=has_feedback,
-            has_essay=has_essay, has_critique=has_critique,
+            has_essay=has_essay, has_critique=has_critique, has_diagrams=has_diagrams,
         )
 
     # ----------------------------------------------------------- modify (Phase 3)

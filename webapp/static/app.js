@@ -158,6 +158,7 @@ function renderWeeks() {
     const wkLabel = `Week ${String(w.week).padStart(2, "0")}`;
     left.appendChild(el("span", "name", w.title || wkLabel));
     const files = [...w.tiers,
+      w.has_diagrams ? "Diagrams.md" : null,
       w.has_quiz ? "Quiz.md" : null, w.has_answers ? "Answers.md" : null,
       w.has_feedback ? "Feedback.md" : null, w.has_essay ? "Essay.md" : null,
       w.has_critique ? "Critique.md" : null].filter(Boolean);
@@ -183,6 +184,7 @@ function renderWeeks() {
     // actions
     const acts = el("div", "actions");
     acts.appendChild(actionBtn("Ingest", (btn) => runIngest(w.week, btn), !w.pdfs.length));
+    acts.appendChild(actionBtn("Diagrams", (btn) => runExplore(w.week, btn), !w.tiers.length));
     acts.appendChild(actionBtn("Quiz", () => openQuiz(w.week), !w.tiers.length));
     acts.appendChild(actionBtn("Review", (btn) => runReview(w.week, btn), !w.has_essay));
     acts.appendChild(actionBtn("Feynman", () => startChat(w.week)));
@@ -291,6 +293,15 @@ async function runReview(week, btn) {
   } catch (e) { toast("Review failed: " + e.message); }
 }
 
+async function runExplore(week, btn) {
+  toast(`Searching Wikimedia Commons for Week ${week} diagrams…`);
+  try {
+    const r = await withSpinner(btn, () => api("/api/explore", jsonBody({ week })));
+    toast(r.count ? `Diagrams: ${r.count} image(s) found.` : "No web diagrams found (Mermaid still covers it).");
+    await refresh(); openFile(week, r.file);
+  } catch (e) { toast("Diagram search failed: " + e.message); }
+}
+
 function jsonBody(obj) {
   return { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(obj) };
 }
@@ -346,8 +357,19 @@ async function openFile(week, name) {
   $("#viewer-title").textContent = `Week ${String(week).padStart(2, "0")} · ${name}`;
   try {
     const md = await (await fetch(`/api/week/${week}/file/${name}`)).text();
-    renderMarkdown($("#viewer-body"), md);
+    await renderMarkdown($("#viewer-body"), md);
+    rewriteAssetImages($("#viewer-body"), week);   // point relative img src at the asset route
   } catch (e) { $("#viewer-body").textContent = "Could not load file."; }
+}
+
+// Diagrams.md embeds images as `assets/NAME`; map those to the asset endpoint.
+function rewriteAssetImages(container, week) {
+  container.querySelectorAll("img").forEach((img) => {
+    const src = img.getAttribute("src") || "";
+    if (/^(https?:)?\/\//.test(src) || src.startsWith("/")) return;  // leave remote/absolute
+    const file = src.replace(/^\.?\//, "").replace(/^assets\//, "");
+    img.src = `/api/week/${week}/asset/${encodeURIComponent(file)}`;
+  });
 }
 
 async function openDiagnostic() {
