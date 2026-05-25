@@ -22,6 +22,8 @@ class WeekInfo:
     pdfs: list[str] = field(default_factory=list)
     tiers: list[str] = field(default_factory=list)
     has_quiz: bool = False
+    has_answers: bool = False
+    has_feedback: bool = False
     has_essay: bool = False
     has_critique: bool = False
 
@@ -32,6 +34,8 @@ class WeekInfo:
             "pdfs": self.pdfs,
             "tiers": self.tiers,
             "has_quiz": self.has_quiz,
+            "has_answers": self.has_answers,
+            "has_feedback": self.has_feedback,
             "has_essay": self.has_essay,
             "has_critique": self.has_critique,
         }
@@ -87,6 +91,8 @@ class Library:
             if (wdir / "input").exists() else []
         tiers = [t for t in TIER_FILES if (wdir / t).exists()]
         has_quiz = (wdir / "Quiz.md").exists()
+        has_answers = (wdir / "Answers.md").exists()
+        has_feedback = (wdir / "Feedback.md").exists()
         has_essay = (wdir / "Essay.md").exists()
         has_critique = (wdir / "Critique.md").exists()
 
@@ -103,5 +109,6 @@ class Library:
 
         return WeekInfo(
             week=week, status=status, pdfs=pdfs, tiers=tiers,
-            has_quiz=has_quiz, has_essay=has_essay, has_critique=has_critique,
+            has_quiz=has_quiz, has_answers=has_answers, has_feedback=has_feedback,
+            has_essay=has_essay, has_critique=has_critique,
         )

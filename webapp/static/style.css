@@ -93,6 +93,20 @@ button.mini { padding: 3px 9px; font-size: 12px; }
 .markdown table { border-collapse: collapse; } .markdown td, .markdown th { border: 1px solid var(--border); padding: 6px 10px; }
 .mermaid { background: #fff; border-radius: 8px; padding: 12px; margin: 14px 0; }
 
+.hidden { display: none !important; }
+
+/* Quiz tab */
+.qz-h { font-size: 14px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; margin: 24px 0 8px; }
+.qz-area {
+  width: 100%; min-height: 160px; resize: vertical; background: var(--panel-2);
+  border: 1px solid var(--border); border-radius: 8px; color: var(--text);
+  padding: 12px 14px; font: 13px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.qz-area:focus { outline: none; border-color: var(--accent); }
+#quiz-questions { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 4px 18px; }
+.qz-feedback:empty { display: none; }
+.qz-feedback { margin-top: 18px; background: rgba(70,196,106,.06); border: 1px solid var(--border); border-radius: 10px; padding: 4px 18px; }
+
 #toast {
   position: fixed; bottom: 22px; left: 50%; transform: translateX(-50%);
   background: var(--panel-2); border: 1px solid var(--border); color: var(--text);

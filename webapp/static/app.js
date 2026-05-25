@@ -72,7 +72,10 @@ function renderWeeks() {
     const row = el("div", "row");
     const left = el("div");
     left.appendChild(el("span", "name", `Week ${String(w.week).padStart(2, "0")}`));
-    const files = [...w.tiers, w.has_critique ? "Critique.md" : null, w.has_quiz ? "Quiz.md" : null].filter(Boolean);
+    const files = [...w.tiers,
+      w.has_quiz ? "Quiz.md" : null, w.has_answers ? "Answers.md" : null,
+      w.has_feedback ? "Feedback.md" : null, w.has_essay ? "Essay.md" : null,
+      w.has_critique ? "Critique.md" : null].filter(Boolean);
     left.appendChild(el("div", "sub", w.pdfs.length ? w.pdfs.join(", ") : "no PDFs"));
     row.appendChild(left);
     row.appendChild(el("span", "badge " + w.status, w.status));
@@ -92,7 +95,7 @@ function renderWeeks() {
     // actions
     const acts = el("div", "actions");
     acts.appendChild(actionBtn("Ingest", (btn) => runIngest(w.week, btn), !w.pdfs.length));
-    acts.appendChild(actionBtn("Quiz", () => runQuiz(w.week), !w.tiers.length));
+    acts.appendChild(actionBtn("Quiz", () => openQuiz(w.week), !w.tiers.length));
     acts.appendChild(actionBtn("Review", (btn) => runReview(w.week, btn), !w.has_essay));
     acts.appendChild(actionBtn("Feynman", () => startChat(w.week)));
     li.appendChild(acts); ul.appendChild(li);
@@ -130,11 +133,6 @@ async function runReview(week, btn) {
   } catch (e) { toast("Review failed: " + e.message); }
 }
 
-async function runQuiz(week) {
-  try { await api("/api/quiz", jsonBody({ week })); }
-  catch (e) { toast(e.message); }
-}
-
 function jsonBody(obj) {
   return { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(obj) };
 }
@@ -160,6 +158,70 @@ async function openDiagnostic() {
   const md = await (await fetch("/api/diagnostic")).text();
   renderMarkdown($("#viewer-body"), md);
 }
+
+// ---------------------------------------------------------------------- quiz
+let quizWeek = null;
+const weekInfo = (week) => state.weeks.find((w) => w.week === week) || {};
+
+async function fetchFile(week, name) {
+  const r = await fetch(`/api/week/${week}/file/${name}`);
+  return r.ok ? r.text() : "";
+}
+
+async function openQuiz(week) {
+  showView("quiz");
+  quizWeek = week;
+  $("#quiz-header").innerHTML = `📝 <strong>Week ${String(week).padStart(2, "0")} Quiz</strong>`;
+  const w = weekInfo(week);
+  if (!w.has_quiz) {
+    $("#quiz-empty").classList.remove("hidden");
+    $("#quiz-body").classList.add("hidden");
+    return;
+  }
+  $("#quiz-empty").classList.add("hidden");
+  $("#quiz-body").classList.remove("hidden");
+  renderMarkdown($("#quiz-questions"), await fetchFile(week, "Quiz.md"));
+  $("#quiz-answers").value = w.has_answers ? await fetchFile(week, "Answers.md") : "";
+  $("#quiz-essay").value = w.has_essay ? await fetchFile(week, "Essay.md") : "";
+  if (w.has_feedback) renderMarkdown($("#quiz-feedback"), await fetchFile(week, "Feedback.md"));
+  else $("#quiz-feedback").innerHTML = "";
+}
+
+async function saveQuizFile(name, content, btn) {
+  const fn = () => api("/api/save", jsonBody({ week: quizWeek, name, content }));
+  return btn ? withSpinner(btn, fn) : fn();
+}
+
+$("#quiz-generate").onclick = async (e) => {
+  toast(`Generating Week ${quizWeek} quiz… (may take a minute)`);
+  try {
+    await withSpinner(e.target, () => api("/api/quiz", jsonBody({ week: quizWeek })));
+    await refresh(); openQuiz(quizWeek); toast("Quiz ready.");
+  } catch (err) { toast("Quiz failed: " + err.message); }
+};
+
+$("#quiz-save").onclick = async (e) => {
+  try { await saveQuizFile("Answers.md", $("#quiz-answers").value, e.target); toast("Answers saved."); }
+  catch (err) { toast("Save failed: " + err.message); }
+};
+
+$("#quiz-essay-save").onclick = async (e) => {
+  try {
+    await saveQuizFile("Essay.md", $("#quiz-essay").value, e.target);
+    await refresh(); toast("Essay saved — Review is now available on this week.");
+  } catch (err) { toast("Save failed: " + err.message); }
+};
+
+$("#quiz-grade").onclick = async (e) => {
+  try {
+    await saveQuizFile("Answers.md", $("#quiz-answers").value, null);
+    toast(`Grading Week ${quizWeek}…`);
+    const r = await withSpinner(e.target, () => api("/api/grade", jsonBody({ week: quizWeek })));
+    renderMarkdown($("#quiz-feedback"), r.feedback);
+    await refresh();
+    toast(`Feedback ready · ${r.findings.length} finding(s) logged.`);
+  } catch (err) { toast("Grading failed: " + err.message); }
+};
 
 // --------------------------------------------------------------------- chat
 function startChat(week) {

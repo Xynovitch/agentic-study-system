@@ -125,9 +125,9 @@ Agentic Study/
 │   ├── ingestion_agent.py     # Phase 1 — tiered synthesis            (implemented)
 │   ├── socratic_dismantler.py # Phase 3 Agent A — adversarial review  (implemented)
 │   ├── feynman_pupil.py       # Phase 3 Agent B — teach-back chat      (implemented)
-│   ├── web_explorer.py        # Phase 1 diagram search                (stub)
-│   ├── quiz_agent.py          # Phase 2 quiz                          (stub)
-│   └── grader_agent.py        # Phase 2 feedback                      (stub)
+│   ├── quiz_agent.py          # Phase 2 — tiered quiz + interleaving  (implemented)
+│   ├── grader_agent.py        # Phase 2 — traced feedback             (implemented)
+│   └── web_explorer.py        # Phase 1 diagram search                (stub)
 │
 ├── prompts/                   # per-agent system prompts (rules encoded in prose)
 │
@@ -175,8 +175,9 @@ python main.py serve          # → http://127.0.0.1:8000
    **Inbox**.
 2. Click **Study → Week NN** to commit an inbox PDF to a week. *(This is your "choose to study
    it" step.)*
-3. Per-week actions: **Ingest** (tiered notes) · **Review** (Socratic critique) · **Feynman**
-   (live teach-back chat). Status badges track progress: **New → Ingested → Quizzed → Reviewed**.
+3. Per-week actions: **Ingest** (tiered notes) · **Quiz** (take it, answer, grade in the Quiz
+   tab) · **Review** (Socratic critique) · **Feynman** (live teach-back chat). Status badges track
+   progress: **New → Ingested → Quizzed → Reviewed**.
 4. Click any generated file chip to read it — **Mermaid diagrams render inline**.
 
 Long LLM calls run in a worker thread so the UI stays responsive; the Feynman chat streams over a
@@ -191,9 +192,10 @@ Same agents, no browser:
 
 ```bash
 python main.py ingest  --week 1                       # Phase 1: PDFs → tiered notes
+python main.py quiz    --week 1                       # Phase 2: build quiz + answers template
+python main.py grade   --week 1                       # Phase 2: trace-grade your answers
 python main.py review  --week 1 --essay curriculum/Week_01/Essay.md   # Phase 3 Agent A
 python main.py feynman --week 1 [--model qwen3:30b]   # Phase 3 Agent B  (/done to end)
-python main.py quiz    --week 1                       # Phase 2 (stub)
 python main.py serve   [--port 8000]                  # web launcher
 ```
 
@@ -240,9 +242,15 @@ the vision API to produce three tier files (`Beginner.md`, `Intermediate.md`, `A
 Each tier is held to the synthesis rules (worked-example-first, a Mermaid diagram, Korean terms in
 parentheses, tier-appropriate depth) via the re-prompt loop.
 
-**Phase 2 — Retention** (`agents/quiz_agent.py`, `grader_agent.py`) — *stub*
-Will generate tiered quizzes (MCQ/cloze → application/logic → synthesis essay) with **20%
-interleaved** prior-week items, plus feedback that traces reasoning rather than scoring it.
+**Phase 2 — Retention** (`agents/quiz_agent.py`, `grader_agent.py`)
+The **Quiz Agent** generates a tiered quiz from the Phase 1 notes (Beginner: MCQ/cloze/definitions
+→ Intermediate: application/logic → Advanced: a synthesis essay prompt), with an **Interleaved
+Review** section drawing ~20% of questions from prior weeks (deterministically enforced by
+`require_interleaving`). One call also produces a blank `Answers.md` template. The **Grader Agent**
+("Diagnostic Coach") reads your answers and writes `Feedback.md` — tracing where your reasoning
+diverges rather than scoring it (`no_binary_grading`), and appending findings to `Diagnostic.md`.
+In the web UI this is the **Quiz** tab: take the quiz, type answers, "Submit for grading", and
+write your Advanced essay (saved to `Essay.md` for Phase 3 Review).
 
 **Phase 3 — Review**
 - **Agent A — Socratic Dismantler** (`socratic_dismantler.py`, API): ingests the Advanced essay,
@@ -270,11 +278,11 @@ interleaved** prior-week items, plus feedback that traces reasoning rather than 
 | Area | State |
 |------|-------|
 | Phase 1 Ingestion (tiered synthesis, vision) | ✅ implemented |
+| Phase 2 Quiz / Grader (tiered, 20% interleaving, traced feedback) | ✅ implemented |
 | Phase 3 Review (Socratic Dismantler + Feynman Pupil) | ✅ implemented |
-| Web launcher (FastAPI + dashboard + live chat) | ✅ implemented |
+| Web launcher (FastAPI + dashboard + Quiz tab + live chat) | ✅ implemented |
 | Hybrid router (Anthropic / OpenAI / Ollama, multimodal) | ✅ implemented |
 | Deterministic validators + re-prompt loop | ✅ implemented |
-| Phase 2 Quiz / Grader | 🚧 stub |
 | Web image search for diagrams | 🚧 TODO (Mermaid covers Dual Coding meanwhile) |
 
 ---

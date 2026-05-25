@@ -47,8 +47,9 @@ These are checked in code by `core/validators.py` and re-prompted via
 
 ## Interfaces
 - **Web launcher** (`python main.py serve`, default port 8000): FastAPI app in `webapp/`.
-  Drop PDFs → inbox (`study/inbox/`) → "Study → Week NN" assigns them → per-week Ingest / Review /
-  Feynman buttons. Long LLM calls run via `asyncio.to_thread`; Feynman chat is a WebSocket
+  Drop PDFs → inbox (`study/inbox/`) → "Study → Week NN" assigns them → per-week Ingest / Quiz /
+  Review / Feynman buttons (Quiz tab handles answers + grading). Long LLM calls run via
+  `asyncio.to_thread`; Feynman chat is a WebSocket
   (`/ws/feynman/{week}`). Frontend is dependency-free vanilla JS in `webapp/static/`.
 - **CLI** (`python main.py <cmd>`): same agents, no browser.
 
@@ -56,8 +57,11 @@ These are checked in code by `core/validators.py` and re-prompted via
 1. **Phase 1 — Synthesis** (`ingest --week N` / Ingest button): parse `Week_NN/input/*.pdf`
    (text + rendered page images) → three tiered notes via the vision API. **Implemented.**
    Real web image search for diagrams is still TODO; Mermaid satisfies Dual Coding meanwhile.
-2. **Phase 2 — Retention** (`quiz --week N`): tiered quiz, 20% interleaved from prior weeks;
-   grader gives understanding/lacks/next-steps feedback. *(stub)*
+2. **Phase 2 — Retention** (`quiz --week N`, then `grade --week N` / Quiz tab): tiered quiz
+   (MCQ/cloze → application/logic → essay prompt) with a 20%-interleaved review section
+   (`require_interleaving`); writes `Quiz.md` + a blank `Answers.md`. The grader writes
+   `Feedback.md` tracing where reasoning diverges (never grades) and logs findings to
+   `Diagnostic.md`. **Implemented.**
 3. **Phase 3 — Review** (implemented):
    - **Agent A** `review --week N [--essay PATH]` — Socratic Dismantler attacks the Advanced
      essay, writes `Critique.md`, appends flaws to `state/Diagnostic.md`.
@@ -77,7 +81,7 @@ so the orchestrator's context window stays small. Keep it that way when extendin
 ## Layout
 ```
 core/      config, llm_router (multimodal), base_agent, validators, pdf_parser, state, library
-agents/    socratic_dismantler, feynman_pupil, ingestion (live) · web_explorer/quiz/grader (stubs)
+agents/    ingestion, quiz, grader, socratic_dismantler, feynman_pupil (live) · web_explorer (stub)
 prompts/   per-agent system prompts (rules encoded in prose)
 webapp/    server.py (FastAPI) + static/ (index.html, app.js, style.css)
 study/inbox/          drop-zone for new PDFs

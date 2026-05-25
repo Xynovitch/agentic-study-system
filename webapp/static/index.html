@@ -32,6 +32,7 @@
     <section id="content">
       <div id="tabs">
         <button data-view="viewer" class="tab active">Viewer</button>
+        <button data-view="quiz" class="tab">Quiz</button>
         <button data-view="chat" class="tab">Feynman Chat</button>
         <button id="open-diagnostic" class="tab ghost">Diagnostic.md</button>
       </div>
@@ -39,6 +40,27 @@
       <div id="viewer" class="view active">
         <div id="viewer-title" class="muted">Select a material on the left to view its notes, quiz, or critique.</div>
         <article id="viewer-body" class="markdown"></article>
+      </div>
+
+      <div id="quiz" class="view">
+        <div id="quiz-header" class="muted">Open a week's <strong>Quiz</strong> to take it.</div>
+        <div id="quiz-empty" class="muted hidden">
+          No quiz yet for this week. <button id="quiz-generate" class="mini primary">Generate Quiz</button>
+        </div>
+        <div id="quiz-body" class="hidden">
+          <article id="quiz-questions" class="markdown"></article>
+          <h3 class="qz-h">Your answers (내 답안)</h3>
+          <textarea id="quiz-answers" class="qz-area" spellcheck="false"></textarea>
+          <div class="actions">
+            <button id="quiz-save" class="mini">Save answers</button>
+            <button id="quiz-grade" class="mini primary">Submit for grading</button>
+          </div>
+          <article id="quiz-feedback" class="markdown qz-feedback"></article>
+          <h3 class="qz-h">Advanced essay (심화 논술) — for Socratic Review</h3>
+          <textarea id="quiz-essay" class="qz-area" spellcheck="false"
+            placeholder="Write your synthesis essay here, save it, then use the Review button on this week…"></textarea>
+          <div class="actions"><button id="quiz-essay-save" class="mini">Save essay</button></div>
+        </div>
       </div>
 
       <div id="chat" class="view">

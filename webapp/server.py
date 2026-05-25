@@ -149,9 +149,63 @@ async def review(payload: dict) -> JSONResponse:
 
 @app.post("/api/quiz")
 async def quiz(payload: dict) -> JSONResponse:
-    return JSONResponse(
-        {"error": "Phase 2 (quiz) is not implemented yet."}, status_code=501
-    )
+    from agents.quiz_agent import QuizAgent
+
+    week = int(payload["week"])
+    agent = QuizAgent(settings, router)
+    prior = list(range(1, week))
+    try:
+        result = await asyncio.to_thread(
+            agent.build_quiz, library.week_dir(week), week, prior
+        )
+    except LLMError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=502)
+    except (FileNotFoundError, ValueError) as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+    return JSONResponse({
+        "week": week,
+        "quiz": result.quiz_path.name,
+        "answers": result.answers_path.name,
+        "interleaved": result.interleaved,
+    })
+
+
+# Files the student is allowed to write through the UI.
+_SAVABLE = {"Answers.md", "Essay.md"}
+
+
+@app.post("/api/save")
+async def save_file(payload: dict) -> JSONResponse:
+    week = int(payload["week"])
+    name = str(payload["name"])
+    if name not in _SAVABLE:
+        raise HTTPException(400, f"Cannot save {name!r}; allowed: {sorted(_SAVABLE)}")
+    path = library.create_week(week) / name
+    path.write_text(payload.get("content", ""), encoding="utf-8")
+    return JSONResponse({"week": week, "saved": name})
+
+
+@app.post("/api/grade")
+async def grade(payload: dict) -> JSONResponse:
+    from agents.grader_agent import GraderAgent
+
+    week = int(payload["week"])
+    wdir = library.week_dir(week)
+    agent = GraderAgent(settings, router)
+    try:
+        result = await asyncio.to_thread(
+            agent.grade, wdir / "Quiz.md", wdir / "Answers.md", week, diagnostic()
+        )
+    except LLMError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=502)
+    except (FileNotFoundError, ValueError) as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+    return JSONResponse({
+        "week": week,
+        "feedback": result.feedback_markdown,
+        "findings": result.findings,
+        "file": result.feedback_path.name,
+    })
 
 
 # ------------------------------------------------------------ feynman (live)

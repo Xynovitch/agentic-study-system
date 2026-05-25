@@ -1,28 +1,96 @@
-"""Phase 2 — Feedback / "check grading" engine.  [STUB]
+"""Phase 2 — Feedback / "check grading" engine.
 
-Reviews quiz answers and reports current understanding, specific lacks, and
-improvement paths. Like all agents here it obeys Metacognitive Scaffolding: it
-traces where reasoning broke down rather than stamping Correct/Incorrect
-(enforced by core.validators.no_binary_grading).
+Reviews the student's quiz answers and reports current understanding, specific
+lacks, and improvement paths. Obeys Metacognitive Scaffolding: it traces where
+reasoning broke down rather than stamping Correct/Incorrect (enforced by
+core.validators). Findings are appended to Diagnostic.md so state evolves weekly.
 """
 from __future__ import annotations
 
+import re
+from dataclasses import dataclass
 from pathlib import Path
 
 from core.base_agent import BaseAgent
 from core.config import Settings
 from core.llm_router import LLMRouter
-from core.validators import no_binary_grading
+from core.state import Diagnostic
+from core.validators import GRADER_RULES
+
+# Same finding format as the Socratic Dismantler: "- [gap] ..." / "- [weakness] ..."
+_FINDING = re.compile(r"^\s*[-*]\s*\[(gap|weakness)\]\s*(.+?)\s*$", re.IGNORECASE)
+
+
+@dataclass
+class GradeResult:
+    feedback_markdown: str
+    feedback_path: Path
+    findings: list[str]
 
 
 class GraderAgent(BaseAgent):
     def __init__(self, settings: Settings, router: LLMRouter):
-        super().__init__("grader", settings, router)
+        super().__init__("grader", settings, router, system_prompt_file="grader.md")
 
-    def grade(self, quiz_path: Path, answers_path: Path, week: int) -> Path:
-        """TODO(phase2): produce Feedback.md with understanding / lacks / next steps,
-        validated against no_binary_grading."""
-        raise NotImplementedError(
-            "GraderAgent.grade is a Phase 2 TODO "
-            f"(validator ready: {no_binary_grading.__name__})."
+    def grade(
+        self,
+        quiz_path: Path,
+        answers_path: Path,
+        week: int,
+        diagnostic: Diagnostic | None = None,
+    ) -> GradeResult:
+        if not quiz_path.exists():
+            raise FileNotFoundError(
+                f"Quiz not found: {quiz_path}. Run `quiz` for Week {week:02d} first."
+            )
+        if not answers_path.exists():
+            raise FileNotFoundError(
+                f"Answers not found: {answers_path}. Fill in Answers.md before grading."
+            )
+        quiz = quiz_path.read_text(encoding="utf-8").strip()
+        answers = answers_path.read_text(encoding="utf-8").strip()
+        if not answers or _looks_empty(answers):
+            raise ValueError(
+                f"No answers written yet in {answers_path.name}. Fill it in, then grade."
+            )
+
+        system = self.system_prompt.replace("{{WEEK}}", str(week))
+        user = (
+            f"Here is the Week {week} quiz followed by my answers. Give feedback per your "
+            f"directives.\n\n=== QUIZ ===\n{quiz}\n\n=== MY ANSWERS ===\n{answers}"
         )
+        feedback = self.run_validated(
+            [{"role": "user", "content": user}], GRADER_RULES, system=system
+        )
+
+        feedback_path = quiz_path.parent / "Feedback.md"
+        feedback_path.write_text(feedback, encoding="utf-8")
+
+        findings = self._extract_findings(feedback)
+        if diagnostic is not None:
+            diagnostic.append_findings(week, "Diagnostic Coach", findings)
+
+        return GradeResult(
+            feedback_markdown=feedback, feedback_path=feedback_path, findings=findings
+        )
+
+    @staticmethod
+    def _extract_findings(feedback: str) -> list[str]:
+        out: list[str] = []
+        for line in feedback.splitlines():
+            m = _FINDING.match(line)
+            if m:
+                out.append(f"[{m.group(1).lower()}] {m.group(2)}")
+        return out
+
+
+def _looks_empty(answers: str) -> bool:
+    """True if Answers.md still only has headings / template scaffolding, no content."""
+    content = [
+        ln for ln in answers.splitlines()
+        if ln.strip()
+        and not ln.lstrip().startswith("#")
+        and not ln.strip().startswith("_")
+        and not re.match(r"^\s*\d+\.\s*$", ln)        # bare "1." with no answer
+    ]
+    return not content

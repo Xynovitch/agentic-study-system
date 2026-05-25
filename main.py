@@ -10,7 +10,8 @@ Usage:
     python main.py review  --week 1 [--essay PATH]   # Agent A: Socratic Dismantler
     python main.py feynman --week 1 [--model NAME]   # Agent B: Feynman Pupil
     python main.py ingest  --week 1                  # Phase 1: synthesize tiered notes
-    python main.py quiz    --week 1                  # Phase 2 (stub)
+    python main.py quiz    --week 1                  # Phase 2: build quiz + answers template
+    python main.py grade   --week 1                  # Phase 2: grade your answers
 """
 from __future__ import annotations
 
@@ -70,8 +71,29 @@ def cmd_quiz(args, settings, router) -> int:
     from agents.quiz_agent import QuizAgent
 
     agent = QuizAgent(settings, router)
-    agent.build_quiz(week_dir(settings.root, args.week), args.week, prior_weeks=
-                     list(range(1, args.week)))
+    prior = list(range(1, args.week))
+    print(f"📝 Building Week {args.week} quiz via {agent.engine}:{agent.model} "
+          f"(interleaving from weeks {prior or 'none'}) …")
+    r = agent.build_quiz(week_dir(settings.root, args.week), args.week, prior)
+    print(f"✅ Wrote {r.quiz_path}")
+    print(f"✅ Wrote {r.answers_path}  ← fill this in, then run `grade`")
+    if r.interleaved:
+        print("   Included an Interleaved Review section (~20% prior weeks).")
+    return 0
+
+
+def cmd_grade(args, settings, router) -> int:
+    from agents.grader_agent import GraderAgent
+
+    wdir = week_dir(settings.root, args.week)
+    diagnostic = Diagnostic.open(settings.root / "state" / "Diagnostic.md")
+    agent = GraderAgent(settings, router)
+    print(f"🧭 Grading Week {args.week} via {agent.engine}:{agent.model} …\n")
+    result = agent.grade(wdir / "Quiz.md", wdir / "Answers.md", args.week, diagnostic)
+    print(result.feedback_markdown)
+    print("\n" + "=" * 60)
+    print(f"✅ Feedback written to {result.feedback_path}")
+    print(f"✅ {len(result.findings)} finding(s) appended to {diagnostic.path}")
     return 0
 
 
@@ -104,9 +126,13 @@ def build_parser() -> argparse.ArgumentParser:
     add_week(i)
     i.set_defaults(func=cmd_ingest)
 
-    q = sub.add_parser("quiz", help="Phase 2: build a tiered quiz (stub)")
+    q = sub.add_parser("quiz", help="Phase 2: build a tiered quiz (+ Answers template)")
     add_week(q)
     q.set_defaults(func=cmd_quiz)
+
+    g = sub.add_parser("grade", help="Phase 2: grade Answers.md (traced feedback)")
+    add_week(g)
+    g.set_defaults(func=cmd_grade)
 
     s = sub.add_parser("serve", help="Launch the browser study UI")
     s.add_argument("--port", type=int, default=8000, help="Port (default 8000)")

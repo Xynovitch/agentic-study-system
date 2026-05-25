@@ -118,6 +118,25 @@ def worked_example_before_rules(text: str) -> tuple[bool, str]:
     return True, ""
 
 
+# --------------------------------------------------------------------------- #
+# Rule: Interleaving — 20% of every quiz must revisit prior weeks.             #
+# Only enforced when prior weeks exist; we check for the labelled section.      #
+# --------------------------------------------------------------------------- #
+_INTERLEAVE_HDR = re.compile(r"^#+.*interleav", re.IGNORECASE | re.MULTILINE)
+
+
+def require_interleaving(enabled: bool) -> Validator:
+    """Return a validator that demands an Interleaved Review section when enabled."""
+    def _check(text: str) -> tuple[bool, str]:
+        if not enabled or _INTERLEAVE_HDR.search(text):
+            return True, ""
+        return False, (
+            "Interleaving violation: include an '## Interleaved Review' section drawing "
+            "~20% of the questions from PRIOR weeks' material, to force long-term retention."
+        )
+    return _check
+
+
 # Convenient bundles per agent.
 SYNTHESIS_RULES: list[Validator] = [
     korean_in_parentheses,
@@ -130,4 +149,11 @@ SOCRATIC_RULES: list[Validator] = [
 ]
 FEYNMAN_RULES: list[Validator] = [
     no_binary_grading,
+]
+QUIZ_RULES: list[Validator] = [          # interleaving is appended per-call by the agent
+    korean_in_parentheses,
+]
+GRADER_RULES: list[Validator] = [
+    no_binary_grading,
+    korean_in_parentheses,
 ]
