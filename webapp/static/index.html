@@ -15,6 +15,14 @@
   <main>
     <!-- LEFT: library -->
     <section id="sidebar">
+      <h2 class="first">Subject</h2>
+      <div id="subject-bar">
+        <select id="subject-select" class="mini-select" title="Active subject"></select>
+        <button id="subject-new" class="mini" title="New subject">＋</button>
+        <button id="subject-rename" class="mini" title="Rename subject">✎</button>
+        <button id="subject-delete" class="mini danger" title="Delete subject">🗑</button>
+      </div>
+
       <div id="dropzone">
         <strong>Drop PDFs here</strong>
         <span>or click to choose · they land in the inbox</span>
@@ -22,9 +30,21 @@
       </div>
 
       <h2>Inbox <span id="inbox-count" class="count"></span></h2>
+      <div id="inbox-bar" class="inbox-bar hidden">
+        <label class="inbox-all"><input type="checkbox" id="inbox-all" /> All</label>
+        <select id="inbox-target" class="mini-select"></select>
+        <button id="inbox-assign" class="mini primary">Assign</button>
+      </div>
       <ul id="inbox" class="list"></ul>
 
       <h2>Curriculum</h2>
+      <div id="weeks-bar" class="bulk-bar hidden">
+        <label class="inbox-all"><input type="checkbox" id="weeks-all" /> All</label>
+        <span class="bulk-label">Selected:</span>
+        <button id="bulk-ingest" class="mini">Ingest</button>
+        <button id="bulk-quiz" class="mini">Quiz</button>
+        <button id="bulk-review" class="mini">Review</button>
+      </div>
       <ul id="weeks" class="list"></ul>
     </section>
 

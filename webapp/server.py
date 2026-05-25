@@ -16,22 +16,48 @@ from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 
 from core.config import load_settings
-from core.library import Library
+from core.library import Library, SubjectStore, ensure_migrated
 from core.llm_router import LLMError, make_router
 from core.state import Diagnostic
 
 settings = load_settings()
 router = make_router(settings)
-library = Library(settings.root)
+
+ensure_migrated(settings.root)            # move any pre-subject layout into a default subject
+subjects = SubjectStore(settings.root)
+inbox_lib = Library(settings.root)        # subject-agnostic; used only for the shared inbox
+_active: dict[str, str | None] = {"subject": None}
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
-DIAGNOSTIC_PATH = settings.root / "state" / "Diagnostic.md"
 
 app = FastAPI(title="Agentic Study System")
 
 
+def current_subject() -> str | None:
+    """The active subject slug, defaulting to the first available one."""
+    slugs = [s.slug for s in subjects.list_subjects()]
+    if _active["subject"] not in slugs:
+        _active["subject"] = slugs[0] if slugs else None
+    return _active["subject"]
+
+
+def get_library() -> Library:
+    """Library scoped to the active subject (400 if none exists yet)."""
+    slug = current_subject()
+    if slug is None:
+        raise HTTPException(400, "No subject yet. Create one first.")
+    return Library(settings.root, slug)
+
+
 def diagnostic() -> Diagnostic:
-    return Diagnostic.open(DIAGNOSTIC_PATH)
+    return Diagnostic.open(get_library().diagnostic_path())
+
+
+def _safe_name(name: str) -> str:
+    """Reject path-traversal in a user-supplied filename; return it unchanged."""
+    if not name or "/" in name or "\\" in name or ".." in name:
+        raise HTTPException(400, "Bad filename")
+    return name
 
 
 # --------------------------------------------------------------------- pages
@@ -43,12 +69,60 @@ async def index() -> FileResponse:
 # ---------------------------------------------------------------------- state
 @app.get("/api/state")
 async def get_state() -> dict:
+    slug = current_subject()
+    lib = Library(settings.root, slug) if slug else None
     return {
-        "inbox": library.list_inbox(),
-        "weeks": [w.to_dict() for w in library.list_weeks()],
-        "next_week": library.next_week_number(),
+        "subjects": [s.to_dict() for s in subjects.list_subjects()],
+        "subject": slug,
+        "inbox": inbox_lib.list_inbox(),
+        "weeks": [w.to_dict() for w in lib.list_weeks()] if lib else [],
+        "next_week": lib.next_week_number() if lib else 1,
         "api_provider": settings.api_provider,
     }
+
+
+# -------------------------------------------------------------------- subjects
+@app.post("/api/subject/create")
+async def subject_create(payload: dict) -> dict:
+    try:
+        slug = subjects.create_subject(str(payload.get("name", "")))
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    _active["subject"] = slug
+    return {"slug": slug, "name": str(payload.get("name", "")).strip()}
+
+
+@app.post("/api/subject/select")
+async def subject_select(payload: dict) -> dict:
+    slug = str(payload.get("slug", ""))
+    if not subjects.exists(slug):
+        raise HTTPException(404, f"Subject not found: {slug}")
+    _active["subject"] = slug
+    return {"slug": slug}
+
+
+@app.post("/api/subject/rename")
+async def subject_rename(payload: dict) -> dict:
+    slug = str(payload["slug"])
+    try:
+        name = subjects.rename_subject(slug, str(payload.get("name", "")))
+    except FileNotFoundError as exc:
+        raise HTTPException(404, str(exc))
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    return {"slug": slug, "name": name}
+
+
+@app.post("/api/subject/delete")
+async def subject_delete(payload: dict) -> dict:
+    slug = str(payload["slug"])
+    try:
+        subjects.delete_subject(slug)
+    except FileNotFoundError as exc:
+        raise HTTPException(404, str(exc))
+    if _active["subject"] == slug:
+        _active["subject"] = None
+    return {"deleted": slug}
 
 
 @app.get("/api/diagnostic", response_class=PlainTextResponse)
@@ -59,9 +133,8 @@ async def get_diagnostic() -> str:
 @app.get("/api/week/{week}/file/{name}", response_class=PlainTextResponse)
 async def get_week_file(week: int, name: str) -> str:
     # Guard against path traversal; only allow plain filenames.
-    if "/" in name or "\\" in name or ".." in name:
-        raise HTTPException(400, "Bad filename")
-    path = library.week_dir(week) / name
+    _safe_name(name)
+    path = get_library().week_dir(week) / name
     if not path.exists():
         raise HTTPException(404, f"{name} not found for Week {week:02d}")
     return path.read_text(encoding="utf-8")
@@ -72,14 +145,15 @@ async def get_week_file(week: int, name: str) -> str:
 async def upload(files: list[UploadFile] = File(...), week: str = Form("inbox")) -> dict:
     """Save PDFs to the inbox, or directly into a week's input/ if week is numeric."""
     if week == "new":
-        target_week = library.next_week_number()
-        dest_dir = library.create_week(target_week) / "input"
+        lib = get_library()
+        target_week = lib.next_week_number()
+        dest_dir = lib.create_week(target_week) / "input"
     elif week.isdigit():
         target_week = int(week)
-        dest_dir = library.create_week(target_week) / "input"
+        dest_dir = get_library().create_week(target_week) / "input"
     else:
         target_week = None
-        dest_dir = library.inbox
+        dest_dir = inbox_lib.inbox
 
     saved = []
     for f in files:
@@ -93,14 +167,83 @@ async def upload(files: list[UploadFile] = File(...), week: str = Form("inbox"))
 
 @app.post("/api/assign")
 async def assign(payload: dict) -> dict:
-    filename = payload.get("filename")
+    """Assign one or more inbox PDFs into a SINGLE week (new or existing).
+
+    Accepts ``filenames`` (a list) or legacy ``filename`` (a single string).
+    ``week`` is ``"new"`` to mint the next week, or a week number to add to an
+    existing one.
+    """
+    filenames = payload.get("filenames")
+    if filenames is None:
+        single = payload.get("filename")
+        filenames = [single] if single else []
+    filenames = [f for f in filenames if f]
+    if not filenames:
+        raise HTTPException(400, "No PDFs selected to assign.")
+
+    lib = get_library()
     week_val = payload.get("week", "new")
-    week = library.next_week_number() if week_val == "new" else int(week_val)
+    week = lib.next_week_number() if week_val == "new" else int(week_val)
     try:
-        dest = library.assign_inbox_to_week(filename, week)
+        dests = lib.assign_many(filenames, week)
     except FileNotFoundError as exc:
         raise HTTPException(404, str(exc))
-    return {"week": week, "dest": str(dest.relative_to(settings.root))}
+    return {"week": week, "assigned": [d.name for d in dests]}
+
+
+# ------------------------------------------------------------------- modify
+@app.post("/api/week/rename")
+async def week_rename(payload: dict) -> dict:
+    week = int(payload["week"])
+    title = get_library().set_title(week, str(payload.get("title", "")))
+    return {"week": week, "title": title}
+
+
+@app.post("/api/pdf/move")
+async def pdf_move(payload: dict) -> dict:
+    from_week = int(payload["from_week"])
+    filename = _safe_name(str(payload["filename"]))
+    to = payload["to"]
+    to_val = "inbox" if to == "inbox" else int(to)
+    try:
+        dest = get_library().move_pdf(filename, from_week, to_val)
+    except FileNotFoundError as exc:
+        raise HTTPException(404, str(exc))
+    return {"moved": dest.name, "to": str(to_val)}
+
+
+@app.post("/api/pdf/delete")
+async def pdf_delete(payload: dict) -> dict:
+    week = int(payload["week"])
+    filename = _safe_name(str(payload["filename"]))
+    try:
+        get_library().delete_pdf(week, filename)
+    except FileNotFoundError as exc:
+        raise HTTPException(404, str(exc))
+    return {"week": week, "deleted": filename}
+
+
+@app.post("/api/week/delete")
+async def week_delete(payload: dict) -> dict:
+    week = int(payload["week"])
+    try:
+        get_library().delete_week(week)
+    except FileNotFoundError as exc:
+        raise HTTPException(404, str(exc))
+    return {"deleted": week}
+
+
+@app.post("/api/week/merge")
+async def week_merge(payload: dict) -> dict:
+    source = int(payload["source"])
+    target = int(payload["target"])
+    try:
+        moved = get_library().merge_weeks(source, target)
+    except FileNotFoundError as exc:
+        raise HTTPException(404, str(exc))
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    return {"source": source, "target": target, "moved": moved}
 
 
 # ------------------------------------------------------------------ pipeline
@@ -112,7 +255,7 @@ async def ingest(payload: dict) -> JSONResponse:
     agent = IngestionAgent(settings, router)
     try:
         outputs = await asyncio.to_thread(
-            agent.ingest_week, library.week_dir(week), week
+            agent.ingest_week, get_library().week_dir(week), week
         )
     except LLMError as exc:
         return JSONResponse({"error": str(exc)}, status_code=502)
@@ -129,7 +272,7 @@ async def review(payload: dict) -> JSONResponse:
     from agents.socratic_dismantler import SocraticDismantler
 
     week = int(payload["week"])
-    essay_path = library.week_dir(week) / "Essay.md"
+    essay_path = get_library().week_dir(week) / "Essay.md"
     agent = SocraticDismantler(settings, router)
     try:
         result = await asyncio.to_thread(
@@ -156,7 +299,7 @@ async def quiz(payload: dict) -> JSONResponse:
     prior = list(range(1, week))
     try:
         result = await asyncio.to_thread(
-            agent.build_quiz, library.week_dir(week), week, prior
+            agent.build_quiz, get_library().week_dir(week), week, prior
         )
     except LLMError as exc:
         return JSONResponse({"error": str(exc)}, status_code=502)
@@ -180,7 +323,7 @@ async def save_file(payload: dict) -> JSONResponse:
     name = str(payload["name"])
     if name not in _SAVABLE:
         raise HTTPException(400, f"Cannot save {name!r}; allowed: {sorted(_SAVABLE)}")
-    path = library.create_week(week) / name
+    path = get_library().create_week(week) / name
     path.write_text(payload.get("content", ""), encoding="utf-8")
     return JSONResponse({"week": week, "saved": name})
 
@@ -190,7 +333,7 @@ async def grade(payload: dict) -> JSONResponse:
     from agents.grader_agent import GraderAgent
 
     week = int(payload["week"])
-    wdir = library.week_dir(week)
+    wdir = get_library().week_dir(week)
     agent = GraderAgent(settings, router)
     try:
         result = await asyncio.to_thread(

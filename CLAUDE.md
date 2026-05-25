@@ -68,11 +68,21 @@ These are checked in code by `core/validators.py` and re-prompted via
    - **Agent B** `feynman --week N [--model M]` — Feynman Pupil reads `Diagnostic.md` and runs a
      teach-back loop (terminal or WebSocket); appends a session summary.
 
+## Subjects (top-level grouping)
+Weeks live under a **subject**: `curriculum/<slug>/Week_NN/`. A subject folder holds a
+`subject.json` ({"name": ...}; the slug folder name never changes on rename) and its own
+`Diagnostic.md`. `core/library.py` splits this into `Library` (scoped to one subject, via
+`Library(root, slug)`) and `SubjectStore` (list/create/rename/delete subjects).
+`ensure_migrated()` runs at server/CLI startup and folds any legacy flat `curriculum/Week_NN/`
+(+ old `state/Diagnostic.md`) into a default subject — idempotent. The inbox is **shared** across
+subjects. The web server tracks one active subject (`/api/subject/{create,select,rename,delete}`);
+CLI week commands take `--subject SLUG|NAME` (default: first subject).
+
 ## State files
-- `state/Diagnostic.md` — evolving strengths/weaknesses/gaps + append-only Findings Log.
-  Shared memory between Agent A and Agent B; auto-created from template.
-- `curriculum/Week_NN/` — per-week `input/`, tier notes, `assets/`, `Quiz.md`, `Essay.md`,
-  `Critique.md`.
+- `curriculum/<slug>/Diagnostic.md` — per-subject evolving strengths/weaknesses/gaps +
+  append-only Findings Log. Shared memory between Agent A and Agent B; auto-created from template.
+- `curriculum/<slug>/Week_NN/` — per-week `input/`, tier notes, `assets/`, `Quiz.md`, `Essay.md`,
+  `Critique.md`, plus a `meta.json` for the optional week display title.
 
 ## Context discipline
 Agents are independent and exchange **file paths + short summaries**, never raw essays/slides,
@@ -84,9 +94,9 @@ core/      config, llm_router (multimodal), base_agent, validators, pdf_parser, 
 agents/    ingestion, quiz, grader, socratic_dismantler, feynman_pupil (live) · web_explorer (stub)
 prompts/   per-agent system prompts (rules encoded in prose)
 webapp/    server.py (FastAPI) + static/ (index.html, app.js, style.css)
-study/inbox/          drop-zone for new PDFs
-curriculum/Week_NN/   per-week inputs & outputs
-state/     Diagnostic.md
+study/inbox/                   shared drop-zone for new PDFs
+curriculum/<slug>/             one subject: subject.json + Diagnostic.md + weeks
+curriculum/<slug>/Week_NN/     per-week inputs & outputs (+ meta.json title)
 config.yaml  routing table   ·   main.py  CLI + `serve`
 ```
 

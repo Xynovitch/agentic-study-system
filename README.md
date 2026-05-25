@@ -1,12 +1,13 @@
 # 📚 Agentic Study System
 
-A local, **hybrid multi-agent** study system that processes a bilingual (English/Korean)
-"Introduction to Computer Science" curriculum through three pedagogical phases — **Synthesis →
-Retention → Review** — and serves it all from a browser. Cloud APIs do the heavy lifting; a local
-Ollama model handles fast conversation. Every artifact is plain, portable Markdown.
+A local, **hybrid multi-agent** study system that processes bilingual (English/Korean) course
+material through three pedagogical phases — **Synthesis → Retention → Review** — and serves it all
+from a browser. Organize work into **subjects**, each holding **weeks** that can bundle several
+PDFs; act on weeks individually or in bulk. Cloud APIs do the heavy lifting; a local Ollama model
+handles fast conversation. Every artifact is plain, portable Markdown.
 
-> Drop a lecture PDF → get tiered notes → get your reasoning dismantled → teach it back to a
-> curious novice until it's jargon-free.
+> Pick a subject → drop lecture PDFs → bundle them into a week → get tiered notes → get your
+> reasoning dismantled → teach it back to a curious novice until it's jargon-free.
 
 ---
 
@@ -57,8 +58,8 @@ rendered slide page-images alongside the text.
 
 **2. File-based Markdown state as the message bus.**
 Agents exchange **file paths and short summaries**, never raw essays or slide dumps, so the
-orchestrator's context window stays small. `state/Diagnostic.md` is the shared memory between the
-review agents.
+orchestrator's context window stays small. Each subject's `Diagnostic.md` is the shared memory
+between the review agents (one per subject, so learning state never bleeds across subjects).
 
 **3. Deterministic rule enforcement.**
 LLMs are non-deterministic, so the pedagogical rules are encoded **in code** (`core/validators.py`)
@@ -119,7 +120,7 @@ Agentic Study/
 │   ├── validators.py          # the five pedagogical rule checks
 │   ├── pdf_parser.py          # bilingual PDF → text + rendered page PNGs (pymupdf)
 │   ├── state.py               # Diagnostic.md read/append manager
-│   └── library.py             # inbox + per-week status bookkeeping
+│   └── library.py             # subjects + per-week status bookkeeping; inbox; migration
 │
 ├── agents/
 │   ├── ingestion_agent.py     # Phase 1 — tiered synthesis            (implemented)
@@ -136,10 +137,18 @@ Agentic Study/
 │   └── static/                # vanilla-JS dashboard (index.html, app.js, style.css)
 │       └── vendor/            # marked.js + mermaid.js, vendored for offline use
 │
-├── study/inbox/              # drop new PDFs here
-├── curriculum/Week_NN/        # per-week input/, tier notes, assets/, Quiz/Essay/Critique
-└── state/Diagnostic.md        # evolving strengths / weaknesses / gaps
+├── study/inbox/                       # shared drop zone for new PDFs
+└── curriculum/
+    └── <subject-slug>/                # one subject (folder slug is stable across renames)
+        ├── subject.json               # display name
+        ├── Diagnostic.md              # this subject's strengths / weaknesses / gaps
+        └── Week_NN/                   # input/, tier notes, assets/, Quiz/Essay/Critique
+            └── meta.json              # optional week display title
 ```
+
+> **Layout note:** weeks live under a subject (`curriculum/<slug>/Week_NN/`). An older flat
+> `curriculum/Week_NN/` layout is migrated automatically on first launch into a default
+> "Introduction to Computer Science" subject — idempotent and non-destructive.
 
 ---
 
@@ -171,14 +180,21 @@ The local **Feynman Pupil** runs fully offline and needs **no API key** — just
 python main.py serve          # → http://127.0.0.1:8000
 ```
 
-1. **Drop PDFs** onto the drop zone (or copy them into `study/inbox/`) — they appear in the
+1. **Pick a subject** in the top selector — or create one with **＋** (rename **✎** / delete **🗑**).
+   Everything below is scoped to the active subject.
+2. **Drop PDFs** onto the drop zone (or copy them into `study/inbox/`) — they appear in the shared
    **Inbox**.
-2. Click **Study → Week NN** to commit an inbox PDF to a week. *(This is your "choose to study
-   it" step.)*
-3. Per-week actions: **Ingest** (tiered notes) · **Quiz** (take it, answer, grade in the Quiz
-   tab) · **Review** (Socratic critique) · **Feynman** (live teach-back chat). Status badges track
+3. **Bundle PDFs into a week:** check one or more inbox PDFs, choose a target (**→ New Week** or
+   **→ Add to Week NN**), and click **Assign**. Several PDFs can share one week; adding more and
+   re-ingesting folds them in.
+4. **Per-week actions:** **Ingest** (tiered notes) · **Quiz** (take/answer/grade in the Quiz tab) ·
+   **Review** (Socratic critique) · **Feynman** (live teach-back chat). Status badges track
    progress: **New → Ingested → Quizzed → Reviewed**.
-4. Click any generated file chip to read it — **Mermaid diagrams render inline**.
+5. **Bulk actions:** tick week checkboxes (or **All**) and run **Ingest / Quiz / Review** across the
+   selection at once — ineligible weeks are skipped, not errored.
+6. **Edit a week:** the **Edit** button reveals rename, per-PDF **move** (to another week or back to
+   inbox) / **delete**, **merge into** another week, and **delete week**.
+7. Click any generated file chip to read it — **Mermaid diagrams render inline**.
 
 Long LLM calls run in a worker thread so the UI stays responsive; the Feynman chat streams over a
 WebSocket. The frontend has **no build step and no network dependency** (marked + mermaid are
@@ -188,18 +204,18 @@ vendored).
 
 ## Usage — CLI
 
-Same agents, no browser:
+Same agents, no browser. Week commands take `--subject SLUG|NAME` (default: the first subject):
 
 ```bash
 python main.py ingest  --week 1                       # Phase 1: PDFs → tiered notes
 python main.py quiz    --week 1                       # Phase 2: build quiz + answers template
 python main.py grade   --week 1                       # Phase 2: trace-grade your answers
-python main.py review  --week 1 --essay curriculum/Week_01/Essay.md   # Phase 3 Agent A
+python main.py review  --week 1 [--subject "Intro to CS"]   # Phase 3 Agent A (essay auto-located)
 python main.py feynman --week 1 [--model qwen3:30b]   # Phase 3 Agent B  (/done to end)
 python main.py serve   [--port 8000]                  # web launcher
 ```
 
-A sample `curriculum/Week_01/Essay.md` ships so `review` works out of the box.
+A sample Week 01 `Essay.md` ships under the default subject so `review` works out of the box.
 
 ---
 
@@ -281,6 +297,10 @@ write your Advanced essay (saved to `Essay.md` for Phase 3 Review).
 | Phase 2 Quiz / Grader (tiered, 20% interleaving, traced feedback) | ✅ implemented |
 | Phase 3 Review (Socratic Dismantler + Feynman Pupil) | ✅ implemented |
 | Web launcher (FastAPI + dashboard + Quiz tab + live chat) | ✅ implemented |
+| Subjects (nested layout, per-subject Diagnostic, picker + CRUD, auto-migration) | ✅ implemented |
+| Multi-PDF weeks (bundle several PDFs into one week) | ✅ implemented |
+| Bulk week actions (select weeks → Ingest / Quiz / Review all) | ✅ implemented |
+| Modify weeks (rename · move/delete PDFs · merge · delete week) | ✅ implemented |
 | Hybrid router (Anthropic / OpenAI / Ollama, multimodal) | ✅ implemented |
 | Deterministic validators + re-prompt loop | ✅ implemented |
 | Web image search for diagrams | 🚧 TODO (Mermaid covers Dual Coding meanwhile) |

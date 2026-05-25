@@ -5,13 +5,15 @@ Thin coordinator: it wires config -> router -> agents and passes *file paths*
 between phases so its own context stays small. Phase 3 (Review) is fully
 implemented; ingest/quiz are wired to working stubs.
 
+Week commands accept --subject SLUG|NAME (default: the first subject).
+
 Usage:
-    python main.py serve   [--port 8000]             # Web launcher (browser UI)
-    python main.py review  --week 1 [--essay PATH]   # Agent A: Socratic Dismantler
-    python main.py feynman --week 1 [--model NAME]   # Agent B: Feynman Pupil
-    python main.py ingest  --week 1                  # Phase 1: synthesize tiered notes
-    python main.py quiz    --week 1                  # Phase 2: build quiz + answers template
-    python main.py grade   --week 1                  # Phase 2: grade your answers
+    python main.py serve   [--port 8000]                       # Web launcher (browser UI)
+    python main.py review  --week 1 [--subject S] [--essay P]  # Agent A: Socratic Dismantler
+    python main.py feynman --week 1 [--subject S] [--model M]  # Agent B: Feynman Pupil
+    python main.py ingest  --week 1 [--subject S]              # Phase 1: synthesize tiered notes
+    python main.py quiz    --week 1 [--subject S]              # Phase 2: build quiz + answers
+    python main.py grade   --week 1 [--subject S]              # Phase 2: grade your answers
 """
 from __future__ import annotations
 
@@ -20,20 +22,37 @@ import sys
 from pathlib import Path
 
 from core.config import load_settings
+from core.library import Library, SubjectStore, ensure_migrated
 from core.llm_router import LLMError, make_router
 from core.state import Diagnostic
 
 
-def week_dir(root: Path, week: int) -> Path:
-    return root / "curriculum" / f"Week_{week:02d}"
+def _library(settings, subject: str | None) -> Library:
+    """Resolve a subject (by slug or name) to a scoped Library; default = first."""
+    ensure_migrated(settings.root)
+    subs = SubjectStore(settings.root).list_subjects()
+    if not subs:
+        raise ValueError(
+            "No subjects yet. Create one in the web UI (python main.py serve), "
+            "or drop PDFs and assign them."
+        )
+    if subject:
+        match = next((s for s in subs if subject in (s.slug, s.name)), None)
+        if not match:
+            avail = ", ".join(s.slug for s in subs)
+            raise ValueError(f"Subject not found: {subject!r}. Available: {avail}")
+        slug = match.slug
+    else:
+        slug = subs[0].slug
+    return Library(settings.root, slug)
 
 
 def cmd_review(args, settings, router) -> int:
     from agents.socratic_dismantler import SocraticDismantler
 
-    wdir = week_dir(settings.root, args.week)
-    essay_path = Path(args.essay) if args.essay else wdir / "Essay.md"
-    diagnostic = Diagnostic.open(settings.root / "state" / "Diagnostic.md")
+    lib = _library(settings, args.subject)
+    essay_path = Path(args.essay) if args.essay else lib.week_dir(args.week) / "Essay.md"
+    diagnostic = Diagnostic.open(lib.diagnostic_path())
 
     agent = SocraticDismantler(settings, router)
     print(f"⚔️  Socratic Dismantler reviewing {essay_path} "
@@ -51,7 +70,7 @@ def cmd_review(args, settings, router) -> int:
 def cmd_feynman(args, settings, router) -> int:
     from agents.feynman_pupil import FeynmanPupil
 
-    diagnostic = Diagnostic.open(settings.root / "state" / "Diagnostic.md")
+    diagnostic = Diagnostic.open(_library(settings, args.subject).diagnostic_path())
     agent = FeynmanPupil(settings, router)
     if args.model:  # per-invocation override (config stays per-agent default)
         object.__setattr__(agent.route, "model", args.model)
@@ -63,7 +82,8 @@ def cmd_ingest(args, settings, router) -> int:
     from agents.ingestion_agent import IngestionAgent
 
     agent = IngestionAgent(settings, router)
-    agent.ingest_week(week_dir(settings.root, args.week), args.week)
+    lib = _library(settings, args.subject)
+    agent.ingest_week(lib.week_dir(args.week), args.week)
     return 0
 
 
@@ -71,10 +91,11 @@ def cmd_quiz(args, settings, router) -> int:
     from agents.quiz_agent import QuizAgent
 
     agent = QuizAgent(settings, router)
+    lib = _library(settings, args.subject)
     prior = list(range(1, args.week))
     print(f"📝 Building Week {args.week} quiz via {agent.engine}:{agent.model} "
           f"(interleaving from weeks {prior or 'none'}) …")
-    r = agent.build_quiz(week_dir(settings.root, args.week), args.week, prior)
+    r = agent.build_quiz(lib.week_dir(args.week), args.week, prior)
     print(f"✅ Wrote {r.quiz_path}")
     print(f"✅ Wrote {r.answers_path}  ← fill this in, then run `grade`")
     if r.interleaved:
@@ -85,8 +106,9 @@ def cmd_quiz(args, settings, router) -> int:
 def cmd_grade(args, settings, router) -> int:
     from agents.grader_agent import GraderAgent
 
-    wdir = week_dir(settings.root, args.week)
-    diagnostic = Diagnostic.open(settings.root / "state" / "Diagnostic.md")
+    lib = _library(settings, args.subject)
+    wdir = lib.week_dir(args.week)
+    diagnostic = Diagnostic.open(lib.diagnostic_path())
     agent = GraderAgent(settings, router)
     print(f"🧭 Grading Week {args.week} via {agent.engine}:{agent.model} …\n")
     result = agent.grade(wdir / "Quiz.md", wdir / "Answers.md", args.week, diagnostic)
@@ -111,6 +133,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     def add_week(sp):
         sp.add_argument("--week", type=int, required=True, help="Week number, e.g. 1")
+        sp.add_argument("--subject", help="Subject slug or name (default: first subject)")
 
     r = sub.add_parser("review", help="Phase 3 Agent A: dismantle the Advanced essay")
     add_week(r)
