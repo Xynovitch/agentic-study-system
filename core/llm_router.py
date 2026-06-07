@@ -1,9 +1,10 @@
 """Hybrid LLM router — the single choke point for every model call.
 
-One uniform `chat()` signature dispatches to three backends:
+One uniform `chat()` signature dispatches to four backends:
 
     * anthropic  -> cloud "Heavy Lifter"  (Claude)
     * openai     -> cloud "Heavy Lifter"  (GPT)
+    * vllm       -> self-hosted "Heavy Lifter" (OpenAI-compatible, e.g. gpt-oss on tailab)
     * ollama     -> local "Fast Chatter"  (qwen, etc.)
 
 SDKs are imported lazily so the project installs/runs even if you only use one
@@ -67,6 +68,7 @@ class LLMRouter:
         # Clients are created on first use and cached here.
         self._anthropic = None
         self._openai = None
+        self._vllm = None
         self._ollama = None
 
     # ------------------------------------------------------------------ public
@@ -82,14 +84,16 @@ class LLMRouter:
     ) -> str:
         """Send a chat completion and return the assistant text.
 
-        `engine` is concrete ("anthropic" | "openai" | "ollama") — the logical
-        "api" alias is already resolved in core.config.
+        `engine` is concrete ("anthropic" | "openai" | "vllm" | "ollama") — the
+        logical "api" alias is already resolved in core.config.
         """
         messages = list(messages)
         if engine == "anthropic":
             return self._chat_anthropic(messages, model, system, temperature, max_tokens)
         if engine == "openai":
             return self._chat_openai(messages, model, system, temperature, max_tokens)
+        if engine == "vllm":
+            return self._chat_vllm(messages, model, system, temperature, max_tokens)
         if engine == "ollama":
             return self._chat_ollama(messages, model, system, temperature)
         raise LLMError(f"Unknown engine '{engine}'.")
@@ -188,6 +192,56 @@ class LLMRouter:
                     "image_url": {"url": f"data:{media};base64,{data}"},
                 })
             out.append({"role": m["role"], "content": parts})
+        return out
+
+    # -------------------------------------------------------------------- vllm
+    def _chat_vllm(self, messages, model, system, temperature, max_tokens) -> str:
+        """Self-hosted, OpenAI-compatible endpoint (e.g. gpt-oss served by vLLM).
+
+        Reuses the OpenAI SDK pointed at `vllm_base_url`. gpt-oss is text-only,
+        so any image attachments are dropped (with an inline note) rather than
+        sent as `image_url` parts the server would reject.
+        """
+        if self._vllm is None:
+            try:
+                import openai
+            except ModuleNotFoundError as exc:
+                raise LLMError(
+                    "The 'openai' package is not installed (required for the vLLM "
+                    "backend too). Run: pip install -r requirements.txt"
+                ) from exc
+            self._vllm = openai.OpenAI(
+                base_url=self.settings.vllm_base_url,
+                api_key=self.settings.vllm_api_key or "EMPTY",
+            )
+
+        full = ([{"role": "system", "content": system}] if system else []) \
+            + self._to_text_only(messages)
+        try:
+            resp = self._vllm.chat.completions.create(
+                model=model,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                messages=full,
+            )
+        except Exception as exc:  # noqa: BLE001 - surface a clean hint
+            raise LLMError(
+                f"vLLM chat failed for model '{model}' at "
+                f"{self.settings.vllm_base_url}: {exc}. Is the SSH tunnel open "
+                f"and the container running? (see scripts/tailab_tunnel.sh)"
+            ) from exc
+        return resp.choices[0].message.content or ""
+
+    @staticmethod
+    def _to_text_only(messages: list[Message]) -> list[dict]:
+        """Flatten messages to plain text, noting any dropped images."""
+        out: list[dict] = []
+        for m in messages:
+            content = m["content"]
+            n = len(m.get("images") or [])
+            if n:
+                content = f"{content}\n\n[{n} image(s) omitted: this model is text-only.]"
+            out.append({"role": m["role"], "content": content})
         return out
 
     # ------------------------------------------------------------------ ollama

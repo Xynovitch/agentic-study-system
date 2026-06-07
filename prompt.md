@@ -53,4 +53,4 @@ Adhere strictly to the Explore-Plan-Implement workflow:
 1.  **EXPLORE & PLAN:** Analyze the technical bottlenecks of this hybrid Python architecture. Recommend the best multi-agent framework for this API/Ollama router setup, and outline your proposed directory structure.
 2.  **AWAIT APPROVAL:** Pause and ask me to confirm the architecture plan.
 3.  **IMPLEMENT:** Once confirmed, output the robust Python scaffolding for Phase 3 (Review).
-</OUTPUT_FORMAT>
+</OUTPUT_FORMAT>claude

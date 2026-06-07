@@ -27,6 +27,10 @@ CONFIG_PATH = ROOT / "config.yaml"
 ENGINE_API = "api"
 ENGINE_OLLAMA = "ollama"
 
+# Concrete providers the logical "api" engine can resolve to (via API_PROVIDER).
+# "vllm" is a self-hosted, OpenAI-compatible server (e.g. gpt-oss on tailab).
+API_PROVIDERS = ("anthropic", "openai", "vllm")
+
 
 @dataclass(frozen=True)
 class AgentRoute:
@@ -43,9 +47,11 @@ class AgentRoute:
 class Settings:
     """Top-level runtime settings + the resolved agent routing table."""
 
-    api_provider: str                  # "anthropic" | "openai"
+    api_provider: str                  # "anthropic" | "openai" | "vllm"
     anthropic_api_key: str | None
     openai_api_key: str | None
+    vllm_base_url: str                 # OpenAI-compatible endpoint (e.g. tailab tunnel)
+    vllm_api_key: str | None           # usually a dummy token; vLLM ignores it unless --api-key set
     ollama_host: str
     max_retries: int
     _routes: dict[str, AgentRoute]
@@ -72,9 +78,9 @@ def load_settings(config_path: Path | None = None) -> Settings:
     raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
 
     api_provider = os.getenv("API_PROVIDER", "anthropic").strip().lower()
-    if api_provider not in ("anthropic", "openai"):
+    if api_provider not in API_PROVIDERS:
         raise ValueError(
-            f"API_PROVIDER must be 'anthropic' or 'openai', got '{api_provider}'"
+            f"API_PROVIDER must be one of {API_PROVIDERS}, got '{api_provider}'"
         )
 
     api_models: dict[str, str] = raw.get("api_models", {})
@@ -118,6 +124,8 @@ def load_settings(config_path: Path | None = None) -> Settings:
         api_provider=api_provider,
         anthropic_api_key=os.getenv("ANTHROPIC_API_KEY"),
         openai_api_key=os.getenv("OPENAI_API_KEY"),
+        vllm_base_url=os.getenv("VLLM_BASE_URL", "http://localhost:8006/v1"),
+        vllm_api_key=os.getenv("VLLM_API_KEY", "EMPTY"),
         ollama_host=os.getenv("OLLAMA_HOST", "http://localhost:11434"),
         max_retries=int((raw.get("validation") or {}).get("max_retries", 2)),
         _routes=routes,

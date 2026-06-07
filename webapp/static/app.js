@@ -25,17 +25,39 @@ async function api(path, opts) {
   return data;
 }
 
+// Mermaid treats an unquoted "(" inside a node label as round-node syntax, so
+// labels like [machine language (기계어)] — which our bilingual notes produce
+// constantly — are syntax errors and the whole diagram silently fails. Quote any
+// [ ] or { } node label that contains parentheses and isn't already quoted.
+function sanitizeMermaid(src) {
+  return src.replace(
+    /([\[{])([^\[\]{}"][^\[\]{}]*?)([\]}])/g,
+    (m, open, label, close) =>
+      /[()]/.test(label) ? `${open}"${label.replace(/"/g, "'")}"${close}` : m
+  );
+}
+
 async function renderMarkdown(container, md) {
   if (!HAS_MARKED) { container.innerHTML = ""; container.appendChild(el("pre", null, md)); return; }
   container.innerHTML = marked.parse(md);
   // Convert ```mermaid blocks into rendered diagrams.
   const blocks = container.querySelectorAll("code.language-mermaid");
-  if (blocks.length && typeof window.mermaid !== "undefined") {
-    blocks.forEach((code) => {
-      const div = el("div", "mermaid"); div.textContent = code.textContent;
-      code.closest("pre").replaceWith(div);
-    });
-    try { await mermaid.run({ nodes: container.querySelectorAll(".mermaid") }); } catch (_) {}
+  if (!blocks.length || typeof window.mermaid === "undefined") return;
+  const divs = [];
+  blocks.forEach((code) => {
+    const div = el("div", "mermaid"); div.textContent = sanitizeMermaid(code.textContent);
+    code.closest("pre").replaceWith(div); divs.push(div);
+  });
+  // Render each diagram in isolation so one malformed diagram can't blank the rest.
+  for (const div of divs) {
+    const src = div.textContent;
+    try {
+      await mermaid.run({ nodes: [div] });
+    } catch (_) {
+      div.classList.add("mermaid-error");
+      div.textContent = "⚠ diagram could not be rendered";
+      const pre = el("pre", "mermaid-src", src); div.after(pre);
+    }
   }
 }
 
@@ -187,9 +209,13 @@ function renderWeeks() {
     acts.appendChild(actionBtn("Diagrams", (btn) => runExplore(w.week, btn), !w.tiers.length));
     acts.appendChild(actionBtn("Quiz", () => openQuiz(w.week), !w.tiers.length));
     acts.appendChild(actionBtn("Review", (btn) => runReview(w.week, btn), !w.has_essay));
+    acts.appendChild(actionBtn("Debate", () => startDebate(w.week), !w.has_essay));
     acts.appendChild(actionBtn("Feynman", () => startChat(w.week)));
     const manage = buildManage(w, wkLabel); manage.classList.add("hidden");
     acts.appendChild(actionBtn("Edit", () => manage.classList.toggle("hidden")));
+    const delBtn = el("button", "mini danger", "Delete");
+    delBtn.onclick = () => deleteWeek(w, wkLabel);
+    acts.appendChild(delBtn);
     li.appendChild(acts);
     li.appendChild(manage);
     ul.appendChild(li);
@@ -381,7 +407,15 @@ async function openDiagnostic() {
 
 // ---------------------------------------------------------------------- quiz
 let quizWeek = null;
+let quizSpec = null;                       // parsed Quiz.json for the open week
 const weekInfo = (week) => state.weeks.find((w) => w.week === week) || {};
+
+const TIER_ORDER = ["Beginner", "Intermediate", "Interleaved", "Advanced"];
+const TIER_LABEL = {
+  Beginner: "Beginner (기초)", Intermediate: "Intermediate (중급)",
+  Interleaved: "Interleaved Review (이전 주 복습)", Advanced: "Advanced Essay Prompts (심화 논술)",
+};
+const isObjective = (t) => t === "mcq" || t === "cloze";
 
 async function fetchFile(week, name) {
   const r = await fetch(`/api/week/${week}/file/${name}`);
@@ -391,6 +425,7 @@ async function fetchFile(week, name) {
 async function openQuiz(week) {
   showView("quiz");
   quizWeek = week;
+  quizSpec = null;
   $("#quiz-header").innerHTML = `📝 <strong>Week ${String(week).padStart(2, "0")} Quiz</strong>`;
   const w = weekInfo(week);
   if (!w.has_quiz) {
@@ -400,11 +435,155 @@ async function openQuiz(week) {
   }
   $("#quiz-empty").classList.add("hidden");
   $("#quiz-body").classList.remove("hidden");
-  renderMarkdown($("#quiz-questions"), await fetchFile(week, "Quiz.md"));
-  $("#quiz-answers").value = w.has_answers ? await fetchFile(week, "Answers.md") : "";
+
+  const rawJson = await fetchFile(week, "Quiz.json");
+  if (rawJson) { try { quizSpec = JSON.parse(rawJson); } catch (_) { quizSpec = null; } }
+
+  const list = $("#quiz-list"); list.innerHTML = "";
+  if (quizSpec && Array.isArray(quizSpec.questions)) {
+    renderQuizInteractive(quizSpec.questions);
+  } else {
+    // Legacy week (Quiz.md only, no structured answers): show static markdown.
+    const art = el("article", "markdown"); list.appendChild(art);
+    renderMarkdown(art, await fetchFile(week, "Quiz.md"));
+    $("#quiz-score").textContent = "Legacy quiz — regenerate for the interactive checker.";
+  }
+
   $("#quiz-essay").value = w.has_essay ? await fetchFile(week, "Essay.md") : "";
   if (w.has_feedback) renderMarkdown($("#quiz-feedback"), await fetchFile(week, "Feedback.md"));
   else $("#quiz-feedback").innerHTML = "";
+}
+
+function renderQuizInteractive(questions) {
+  const list = $("#quiz-list"); list.innerHTML = "";
+  TIER_ORDER.forEach((tier) => {
+    const group = questions.filter((q) => q.tier === tier);
+    if (!group.length) return;
+    list.appendChild(el("h3", "qz-h", TIER_LABEL[tier] || tier));
+    group.forEach((q, i) => list.appendChild(renderCard(q, i + 1)));
+  });
+  updateScore();
+}
+
+function renderCard(q, n) {
+  const card = el("div", "q-card");
+  card._q = q;
+
+  const head = el("div", "q-head");
+  head.appendChild(el("span", "q-id", q.id || `#${n}`));
+  const badge = el("span", "q-badge"); badge.dataset.role = "badge";
+  head.appendChild(badge);
+  card.appendChild(head);
+  card.appendChild(el("div", "q-prompt", q.prompt || ""));
+
+  const body = el("div", "q-body");
+  if (q.type === "mcq") {
+    (q.options || []).forEach((opt) => {
+      const lbl = el("label", "q-opt");
+      const radio = el("input"); radio.type = "radio"; radio.name = q.id; radio.value = opt;
+      lbl.appendChild(radio); lbl.appendChild(el("span", null, opt));
+      body.appendChild(lbl);
+    });
+  } else if (q.type === "cloze" || q.type === "short") {
+    const inp = el("input", "q-input"); inp.type = "text"; inp.placeholder = "Your answer (내 답)…";
+    if (q.type === "cloze") inp.addEventListener("keydown", (e) => { if (e.key === "Enter") checkCard(card); });
+    body.appendChild(inp);
+  } else if (q.type === "essay") {
+    body.appendChild(el("div", "q-essay-note", "Write your essay in the box below, then use Review on this week."));
+  }
+  card.appendChild(body);
+
+  if (q.type !== "essay") {
+    const acts = el("div", "q-acts");
+    const objective = isObjective(q.type);
+    const btn = el("button", "mini", objective ? "Check" : "Reveal answer");
+    btn.onclick = () => (objective ? checkCard(card) : revealCard(card));
+    acts.appendChild(btn);
+    card.appendChild(acts);
+  }
+  const rev = el("div", "q-reveal hidden"); rev.dataset.role = "reveal";
+  card.appendChild(rev);
+  return card;
+}
+
+// --- checking -------------------------------------------------------------
+function normalize(s) {
+  return (s || "").toString().toLowerCase().trim()
+    .replace(/\s+/g, " ")
+    .replace(/^[\s"'(.,;:!?-]+|[\s"').,;:!?-]+$/g, "");
+}
+function mcqLetter(s) {
+  const m = normalize(s).match(/^([a-z])\b/);
+  return m ? m[1] : normalize(s);
+}
+function isCorrect(q, value) {
+  if (q.type === "mcq") return mcqLetter(value) === mcqLetter(q.answer);
+  if (q.type === "cloze") return (q.answers || []).map(normalize).includes(normalize(value));
+  return null;
+}
+function cardValue(card) {
+  const q = card._q;
+  if (q.type === "mcq") {
+    const sel = card.querySelector(`input[name="${q.id}"]:checked`);
+    return sel ? sel.value : "";
+  }
+  const inp = card.querySelector(".q-input");
+  return inp ? inp.value : "";
+}
+
+function checkCard(card, quiet) {
+  const q = card._q;
+  const value = cardValue(card);
+  if (!value) { if (!quiet) toast("Select or type an answer first."); return; }
+  const ok = isCorrect(q, value);
+  const badge = card.querySelector('[data-role="badge"]');
+  badge.textContent = ok ? "✓" : "✗";
+  badge.className = "q-badge " + (ok ? "ok" : "bad");
+  card.classList.toggle("answered-ok", !!ok);
+  card.classList.toggle("answered-bad", !ok);
+  card.dataset.checked = "1";
+  revealCard(card);
+  updateScore();
+}
+
+function revealCard(card) {
+  const q = card._q;
+  const rev = card.querySelector('[data-role="reveal"]');
+  rev.innerHTML = "";
+  const ans = q.type === "cloze" ? (q.answers || []).join("  /  ") : (q.answer || "");
+  if (ans) {
+    const a = el("div", "q-ans");
+    a.appendChild(el("strong", null, "Answer (정답): "));
+    a.appendChild(el("span", null, ans));
+    rev.appendChild(a);
+  }
+  if (q.explanation) rev.appendChild(el("div", "q-exp", q.explanation));
+  rev.classList.remove("hidden");
+  card.dataset.revealed = "1";
+}
+
+function updateScore() {
+  const cards = [...$("#quiz-list").querySelectorAll(".q-card")];
+  const objective = cards.filter((c) => isObjective(c._q.type));
+  if (!objective.length) { $("#quiz-score").textContent = ""; return; }
+  const correct = objective.filter((c) => c.classList.contains("answered-ok")).length;
+  const checked = objective.filter((c) => c.dataset.checked === "1").length;
+  let txt = `Objective: ${correct} / ${objective.length} correct`;
+  if (checked < objective.length) txt += ` · ${checked} checked`;
+  $("#quiz-score").textContent = txt;
+}
+
+function assembleAnswers() {
+  const lines = [`# Week ${quizWeek} — My Answers`, ""];
+  TIER_ORDER.forEach((tier) => {
+    const cards = [...$("#quiz-list").querySelectorAll(".q-card")]
+      .filter((c) => c._q.tier === tier && c._q.type !== "essay");
+    if (!cards.length) return;
+    lines.push(`## ${TIER_LABEL[tier] || tier}`);
+    cards.forEach((c) => lines.push(`- ${c._q.id}: ${cardValue(c).replace(/\s+/g, " ").trim()}`));
+    lines.push("");
+  });
+  return lines.join("\n");
 }
 
 async function saveQuizFile(name, content, btn) {
@@ -413,17 +592,20 @@ async function saveQuizFile(name, content, btn) {
 }
 
 $("#quiz-generate").onclick = async (e) => {
-  toast(`Generating Week ${quizWeek} quiz… (may take a minute)`);
+  toast(`Generating Week ${quizWeek} quiz… (gpt-oss, may take a minute)`);
   try {
     await withSpinner(e.target, () => api("/api/quiz", jsonBody({ week: quizWeek })));
     await refresh(); openQuiz(quizWeek); toast("Quiz ready.");
   } catch (err) { toast("Quiz failed: " + err.message); }
 };
 
-$("#quiz-save").onclick = async (e) => {
-  try { await saveQuizFile("Answers.md", $("#quiz-answers").value, e.target); toast("Answers saved."); }
-  catch (err) { toast("Save failed: " + err.message); }
+$("#quiz-checkall").onclick = () => {
+  [...$("#quiz-list").querySelectorAll(".q-card")]
+    .filter((c) => isObjective(c._q.type)).forEach((c) => checkCard(c, true));
+  updateScore();
 };
+
+$("#quiz-reset").onclick = () => { if (quizSpec) { renderQuizInteractive(quizSpec.questions); $("#quiz-feedback").innerHTML = ""; } };
 
 $("#quiz-essay-save").onclick = async (e) => {
   try {
@@ -433,9 +615,10 @@ $("#quiz-essay-save").onclick = async (e) => {
 };
 
 $("#quiz-grade").onclick = async (e) => {
+  if (!quizSpec) { toast("Generate the interactive quiz first."); return; }
   try {
-    await saveQuizFile("Answers.md", $("#quiz-answers").value, null);
-    toast(`Grading Week ${quizWeek}…`);
+    await saveQuizFile("Answers.md", assembleAnswers(), null);
+    toast(`Submitting Week ${quizWeek} for feedback…`);
     const r = await withSpinner(e.target, () => api("/api/grade", jsonBody({ week: quizWeek })));
     renderMarkdown($("#quiz-feedback"), r.feedback);
     await refresh();
@@ -444,24 +627,56 @@ $("#quiz-grade").onclick = async (e) => {
 };
 
 // --------------------------------------------------------------------- chat
-function startChat(week) {
+// Two live interlocutors share one chat panel: the Feynman pupil (teach-back) and
+// Socrates (debate your essay against its critique).
+const SESSIONS = {
+  feynman: {
+    path: "feynman", reply: "pupil", bubble: "pupil",
+    header: (w) => `🧒 Feynman Pupil · Week ${String(w).padStart(2, "0")} — teach until it clicks. /done to end.`,
+    connecting: "Connecting to the pupil…", placeholder: "Teach the pupil… (/done to end)",
+  },
+  socrates: {
+    path: "socrates", reply: "socrates", bubble: "socrates",
+    header: (w) => `🏛️ Socratic Debate · Week ${String(w).padStart(2, "0")} — defend your essay. /done to end.`,
+    connecting: "Reading your essay & critique…", placeholder: "Defend your reasoning… (/done to end)",
+  },
+};
+
+function startSession(week, kind) {
+  const cfg = SESSIONS[kind];
   showView("chat");
   chatWeek = week;
-  $("#chat-header").textContent = `🧒 Feynman Pupil · Week ${String(week).padStart(2, "0")} — teach until it clicks. /done to end.`;
+  $("#chat-header").textContent = cfg.header(week);
+  $("#chat-input").placeholder = cfg.placeholder;
   $("#chat-log").innerHTML = "";
   if (ws) { try { ws.close(); } catch (_) {} }
-  ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws/feynman/${week}`);
+  ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws/${cfg.path}/${week}`);
   setChatEnabled(false);
-  addBubble("sys", "Connecting to the pupil…");
+  addBubble("sys", cfg.connecting);
 
   ws.onmessage = (ev) => {
     const m = JSON.parse(ev.data);
-    if (m.role === "pupil") { addBubble("pupil", m.text); setChatEnabled(true); }
+    if (m.role === cfg.reply) { addBubble(cfg.bubble, m.text); setChatEnabled(true); }
+    else if (m.role === "sys") { addBubble("sys", m.text); }
     else if (m.role === "summary") { addBubble("sys", "Session summary saved to Diagnostic.md."); setChatEnabled(false); refresh(); }
     else if (m.role === "error") { addBubble("err", m.text); setChatEnabled(false); }
   };
   ws.onclose = () => setChatEnabled(false);
   ws.onerror = () => addBubble("err", "Connection error. Is the server running?");
+}
+
+const startChat = (week) => startSession(week, "feynman");
+const startDebate = (week) => startSession(week, "socrates");
+
+// Delete a whole week and its contents (notes, quiz, essay, PDFs). Irreversible.
+async function deleteWeek(w, wkLabel) {
+  const wkName = w.title || wkLabel;
+  if (!confirm(`Delete ${wkName} and ALL its contents (notes, quiz, essay, PDFs)? This cannot be undone.`)) return;
+  try {
+    await api("/api/week/delete", jsonBody({ week: w.week }));
+    toast(`${wkName} deleted.`);
+    await refresh();
+  } catch (e) { toast("Delete failed: " + e.message); }
 }
 
 function setChatEnabled(on) {

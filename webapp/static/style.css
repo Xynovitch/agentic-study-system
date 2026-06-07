@@ -108,6 +108,7 @@ button.mini { padding: 3px 9px; font-size: 12px; }
 #chat-log { flex: 1; overflow-y: auto; padding: 20px; display: flex; flex-direction: column; gap: 12px; }
 .bubble { max-width: 70%; padding: 10px 14px; border-radius: 14px; white-space: pre-wrap; }
 .bubble.pupil { background: var(--panel-2); border: 1px solid var(--border); align-self: flex-start; border-bottom-left-radius: 4px; }
+.bubble.socrates { background: rgba(155,140,255,.12); border: 1px solid rgba(155,140,255,.4); align-self: flex-start; border-bottom-left-radius: 4px; max-width: 80%; }
 .bubble.me { background: var(--accent); color: #08131f; align-self: flex-end; border-bottom-right-radius: 4px; }
 .bubble.sys { align-self: center; background: rgba(70,196,106,.12); color: var(--reviewed); font-size: 13px; }
 .bubble.err { align-self: center; background: rgba(240,90,90,.14); color: #f0a; }
@@ -124,6 +125,8 @@ button.mini { padding: 3px 9px; font-size: 12px; }
 .markdown table { border-collapse: collapse; } .markdown td, .markdown th { border: 1px solid var(--border); padding: 6px 10px; }
 .markdown img { max-width: 100%; height: auto; background: #fff; border-radius: 8px; padding: 8px; margin: 8px 0; }
 .mermaid { background: #fff; border-radius: 8px; padding: 12px; margin: 14px 0; }
+.mermaid-error { background: rgba(240,90,90,.1); color: #f0a; border: 1px solid var(--border); font-size: 12px; }
+.mermaid-src { background: var(--panel-2); border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; font-size: 11px; overflow-x: auto; white-space: pre; color: var(--muted); }
 
 .hidden { display: none !important; }
 
@@ -135,9 +138,40 @@ button.mini { padding: 3px 9px; font-size: 12px; }
   padding: 12px 14px; font: 13px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 .qz-area:focus { outline: none; border-color: var(--accent); }
-#quiz-questions { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 4px 18px; }
 .qz-feedback:empty { display: none; }
 .qz-feedback { margin-top: 18px; background: rgba(70,196,106,.06); border: 1px solid var(--border); border-radius: 10px; padding: 4px 18px; }
+
+/* Interactive quiz */
+#quiz-toolbar { display: flex; align-items: center; gap: 8px; position: sticky; top: 0; z-index: 2;
+  padding: 10px 2px; background: var(--bg, var(--panel)); border-bottom: 1px solid var(--border); }
+.grow { flex: 1; }
+.qz-score { font-size: 13px; font-weight: 600; color: var(--text); }
+.qz-hint { font-size: 12px; align-self: center; }
+
+.q-card { background: var(--panel-2); border: 1px solid var(--border); border-left: 3px solid var(--border);
+  border-radius: 10px; padding: 12px 14px; margin: 10px 0; }
+.q-card.answered-ok { border-left-color: var(--reviewed); }
+.q-card.answered-bad { border-left-color: #ef5d6b; }
+.q-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.q-id { font: 600 11px ui-monospace, Menlo, monospace; color: var(--muted);
+  background: var(--panel); border: 1px solid var(--border); border-radius: 5px; padding: 1px 6px; }
+.q-badge { font-weight: 700; font-size: 14px; }
+.q-badge.ok { color: var(--reviewed); }
+.q-badge.bad { color: #ef5d6b; }
+.q-prompt { line-height: 1.55; margin-bottom: 8px; white-space: pre-wrap; }
+.q-body { display: flex; flex-direction: column; gap: 6px; }
+.q-opt { display: flex; align-items: flex-start; gap: 8px; cursor: pointer; padding: 4px 6px; border-radius: 6px; }
+.q-opt:hover { background: rgba(110,168,254,.07); }
+.q-opt input { accent-color: var(--accent); margin-top: 3px; }
+.q-input { background: var(--panel); border: 1px solid var(--border); color: var(--text);
+  border-radius: 7px; padding: 7px 10px; font: inherit; max-width: 460px; }
+.q-input:focus { outline: none; border-color: var(--accent); }
+.q-essay-note { color: var(--muted); font-size: 12px; }
+.q-acts { margin-top: 9px; }
+.q-reveal { margin-top: 10px; padding: 9px 12px; border-radius: 8px;
+  background: rgba(110,168,254,.07); border: 1px solid var(--border); font-size: 13px; line-height: 1.55; }
+.q-ans { color: var(--text); }
+.q-exp { color: var(--muted); margin-top: 5px; }
 
 #toast {
   position: fixed; bottom: 22px; left: 50%; transform: translateX(-50%);

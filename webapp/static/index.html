@@ -53,7 +53,7 @@
       <div id="tabs">
         <button data-view="viewer" class="tab active">Viewer</button>
         <button data-view="quiz" class="tab">Quiz</button>
-        <button data-view="chat" class="tab">Feynman Chat</button>
+        <button data-view="chat" class="tab">Live Chat</button>
         <button id="open-diagnostic" class="tab ghost">Diagnostic.md</button>
       </div>
 
@@ -68,12 +68,16 @@
           No quiz yet for this week. <button id="quiz-generate" class="mini primary">Generate Quiz</button>
         </div>
         <div id="quiz-body" class="hidden">
-          <article id="quiz-questions" class="markdown"></article>
-          <h3 class="qz-h">Your answers (내 답안)</h3>
-          <textarea id="quiz-answers" class="qz-area" spellcheck="false"></textarea>
+          <div id="quiz-toolbar">
+            <span id="quiz-score" class="qz-score muted"></span>
+            <span class="grow"></span>
+            <button id="quiz-checkall" class="mini">Check all objective</button>
+            <button id="quiz-reset" class="mini ghost">Reset</button>
+          </div>
+          <div id="quiz-list"></div>
           <div class="actions">
-            <button id="quiz-save" class="mini">Save answers</button>
-            <button id="quiz-grade" class="mini primary">Submit for grading</button>
+            <button id="quiz-grade" class="mini primary">Submit for deeper feedback</button>
+            <span class="muted qz-hint">Traces where your reasoning broke (open-ended &amp; essay).</span>
           </div>
           <article id="quiz-feedback" class="markdown qz-feedback"></article>
           <h3 class="qz-h">Advanced essay (심화 논술) — for Socratic Review</h3>
@@ -84,7 +88,7 @@
       </div>
 
       <div id="chat" class="view">
-        <div id="chat-header" class="muted">Pick a week and start a Feynman chat.</div>
+        <div id="chat-header" class="muted">Start a Feynman teach-back or a Socratic debate from a week's actions.</div>
         <div id="chat-log"></div>
         <form id="chat-form">
           <input id="chat-input" type="text" placeholder="Teach the pupil… (/done to end)" autocomplete="off" disabled />

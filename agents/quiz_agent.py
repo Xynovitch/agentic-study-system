@@ -1,28 +1,47 @@
 """Phase 2 — Retention (Assessment Engine).
 
-Generates a tiered quiz from the week's Phase 1 tier files, interleaving ~20% of
-questions from prior weeks to force long-term retention. One API call produces
-both the quiz and a matching blank answer template (split on `===ANSWERS===`).
+Generates a tiered quiz from the week's Phase 1 tier files, interleaving prior-week
+questions to force long-term retention. The model returns a structured JSON question
+bank *with answer keys*; we persist that as `Quiz.json` (what the interactive,
+auto-checked Quiz tab reads) and render an answer-free `Quiz.md` for the Viewer.
+Per-tier question counts come from `config.yaml` so the quiz can be resized without
+touching code.
 """
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from pathlib import Path
 
 from core.base_agent import BaseAgent
 from core.config import Settings
 from core.llm_router import LLMRouter
-from core.validators import QUIZ_RULES, require_interleaving
+from core.validators import (
+    QUIZ_RULES,
+    parse_quiz_json,
+    valid_quiz_json,
+)
 
 TIER_FILES = ("Beginner.md", "Intermediate.md", "Advanced.md")
-INTERLEAVE_RATIO = 0.20
-_ANSWERS_DELIM = "===ANSWERS==="
+
+# Fallback counts if an agent's config.yaml entry omits them.
+DEFAULT_COUNTS = {"beginner": 20, "intermediate": 10, "interleaved": 4, "essays": 3}
+
+# Order tiers render in Quiz.md / Answers.md.
+_TIER_ORDER = ("Beginner", "Intermediate", "Interleaved", "Advanced")
+_TIER_HEADINGS = {
+    "Beginner": "Beginner (기초)",
+    "Intermediate": "Intermediate (중급)",
+    "Interleaved": "Interleaved Review (이전 주 복습)",
+    "Advanced": "Advanced Essay Prompts (심화 논술)",
+}
 
 
 @dataclass
 class QuizResult:
-    quiz_path: Path
-    answers_path: Path
+    quiz_path: Path          # answer-free Quiz.md (Viewer / markdown compat)
+    spec_path: Path          # Quiz.json (structured, with answer keys)
+    answers_path: Path       # blank Answers.md template (grader fallback)
     interleaved: bool
 
 
@@ -31,7 +50,7 @@ class QuizAgent(BaseAgent):
         super().__init__("quiz", settings, router, system_prompt_file="quiz.md")
 
     def build_quiz(self, week_dir: Path, week: int, prior_weeks: list[int]) -> QuizResult:
-        """Generate Quiz.md + an Answers.md template. Returns the written paths."""
+        """Generate Quiz.json + an answer-free Quiz.md + a blank Answers.md."""
         tier_text = self._read_tiers(week_dir)
         if not tier_text:
             raise FileNotFoundError(
@@ -39,34 +58,104 @@ class QuizAgent(BaseAgent):
             )
         prior_text = self._read_prior(week_dir.parent, prior_weeks)
         interleave = bool(prior_text)
+        counts = self._counts(interleave)
 
         system = self.system_prompt.replace("{{WEEK}}", str(week))
-        user = (
-            f"Generate the Week {week} quiz from these tier notes.\n\n"
-            f"=== THIS WEEK'S NOTES ===\n{tier_text}\n"
-        )
-        if interleave:
-            pct = int(INTERLEAVE_RATIO * 100)
-            user += (
-                f"\n=== PRIOR WEEKS (draw ~{pct}% of questions from here) ===\n{prior_text}\n"
-            )
-        else:
-            user += "\n(No prior weeks — omit the Interleaved Review section.)\n"
+        user = self._build_user_prompt(week, tier_text, prior_text, counts, interleave)
 
-        validators = QUIZ_RULES + [require_interleaving(interleave)]
+        validators = QUIZ_RULES + [valid_quiz_json(counts, interleave)]
+        # A ~37-question bank with answer keys + explanations needs generous headroom.
         raw = self.run_validated(
-            [{"role": "user", "content": user}], validators, system=system, max_tokens=4096
+            [{"role": "user", "content": user}], validators, system=system, max_tokens=16000
         )
 
-        quiz_md, answers_md = self._split(raw, week)
+        spec = parse_quiz_json(raw)
+        if spec is None or not isinstance(spec.get("questions"), list):
+            raise ValueError(
+                "The quiz model did not return parseable JSON after retries. "
+                "Try regenerating; if it persists, lower the requested counts in config.yaml."
+            )
+        spec.setdefault("week", week)
+        questions = spec["questions"]
+
+        spec_path = week_dir / "Quiz.json"
         quiz_path = week_dir / "Quiz.md"
         answers_path = week_dir / "Answers.md"
-        quiz_path.write_text(quiz_md, encoding="utf-8")
+
+        spec_path.write_text(json.dumps(spec, ensure_ascii=False, indent=2), encoding="utf-8")
+        quiz_path.write_text(self._render_quiz_md(week, questions), encoding="utf-8")
         # Don't clobber answers the student already wrote.
         if not answers_path.exists():
-            answers_path.write_text(answers_md, encoding="utf-8")
+            answers_path.write_text(self._render_answers_template(week, questions), encoding="utf-8")
 
-        return QuizResult(quiz_path=quiz_path, answers_path=answers_path, interleaved=interleave)
+        return QuizResult(
+            quiz_path=quiz_path, spec_path=spec_path,
+            answers_path=answers_path, interleaved=interleave,
+        )
+
+    # ----------------------------------------------------------------- prompt
+    def _counts(self, interleave: bool) -> dict:
+        extras = self.route.extras
+        counts = {k: int(extras.get(k, DEFAULT_COUNTS[k])) for k in DEFAULT_COUNTS}
+        if not interleave:
+            counts["interleaved"] = 0
+        return counts
+
+    @staticmethod
+    def _build_user_prompt(week, tier_text, prior_text, counts, interleave) -> str:
+        lines = [
+            f"Generate the Week {week} quiz as a single JSON object per your directives.",
+            "",
+            "Produce approximately these many questions per tier (honor these counts):",
+            f"- Beginner: {counts['beginner']} (mostly mcq/cloze, some short definitions)",
+            f"- Intermediate: {counts['intermediate']} (short application/logic problems)",
+            f"- Advanced: {counts['essays']} essay prompts",
+        ]
+        if interleave:
+            lines.append(
+                f"- Interleaved: {counts['interleaved']} questions drawn from the PRIOR weeks below"
+            )
+        lines += ["", "=== THIS WEEK'S NOTES ===", tier_text]
+        if interleave:
+            lines += ["", "=== PRIOR WEEKS (source for the Interleaved questions) ===", prior_text]
+        else:
+            lines += ["", "(No prior weeks — omit Interleaved questions.)"]
+        return "\n".join(lines)
+
+    # ----------------------------------------------------------------- render
+    @staticmethod
+    def _render_quiz_md(week: int, questions: list[dict]) -> str:
+        """Human-readable, ANSWER-FREE markdown grouped by tier (for the Viewer)."""
+        out = [f"# Week {week} Quiz", ""]
+        for tier in _TIER_ORDER:
+            group = [q for q in questions if q.get("tier") == tier]
+            if not group:
+                continue
+            out.append(f"## {_TIER_HEADINGS.get(tier, tier)}")
+            for n, q in enumerate(group, 1):
+                prompt = str(q.get("prompt", "")).strip()
+                if q.get("type") == "essay":
+                    out.append(f"{n}. > {prompt}")
+                else:
+                    out.append(f"{n}. ({q.get('type')}) {prompt}")
+                    for opt in q.get("options") or []:
+                        out.append(f"   - {opt}")
+            out.append("")
+        return "\n".join(out).strip() + "\n"
+
+    @staticmethod
+    def _render_answers_template(week: int, questions: list[dict]) -> str:
+        """Blank template mirroring question ids (grader fallback; essays excluded)."""
+        out = [f"# Week {week} — My Answers", ""]
+        for tier in _TIER_ORDER:
+            group = [q for q in questions if q.get("tier") == tier and q.get("type") != "essay"]
+            if not group:
+                continue
+            out.append(f"## {_TIER_HEADINGS.get(tier, tier)}")
+            for q in group:
+                out.append(f"- {q.get('id', '?')}: ")
+            out.append("")
+        return "\n".join(out).strip() + "\n"
 
     # ----------------------------------------------------------------- helpers
     @staticmethod
@@ -89,17 +178,3 @@ class QuizAgent(BaseAgent):
                 if p.exists():
                     parts.append(f"--- Week {w:02d} / {name} ---\n{p.read_text(encoding='utf-8')}")
         return "\n\n".join(parts).strip()
-
-    @staticmethod
-    def _split(raw: str, week: int) -> tuple[str, str]:
-        if _ANSWERS_DELIM in raw:
-            quiz, _, answers = raw.partition(_ANSWERS_DELIM)
-            return quiz.strip(), answers.strip() or QuizAgent._fallback_answers(week)
-        return raw.strip(), QuizAgent._fallback_answers(week)
-
-    @staticmethod
-    def _fallback_answers(week: int) -> str:
-        return (
-            f"# Week {week} — My Answers\n\n"
-            "_Write your answers below, numbered to match the quiz, then run grading._\n"
-        )

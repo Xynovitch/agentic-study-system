@@ -9,6 +9,11 @@ ollama>=0.3
 # PDF ingestion (Phase 1): text extraction + page->image rendering
 pymupdf>=1.24
 
+# OCR for image-based slides (Phase 1). REQUIRES the Tesseract binary + Korean
+# language data installed at the system level:  brew install tesseract tesseract-lang
+pytesseract>=0.3
+pillow>=10.0
+
 # Config + environment
 pyyaml>=6.0
 python-dotenv>=1.0

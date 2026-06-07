@@ -10,6 +10,7 @@ Convention: a validator returns (True, "") on success, or (False, reason) where
 """
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass
 from typing import Callable, Sequence
@@ -134,6 +135,101 @@ def require_interleaving(enabled: bool) -> Validator:
             "Interleaving violation: include an '## Interleaved Review' section drawing "
             "~20% of the questions from PRIOR weeks' material, to force long-term retention."
         )
+    return _check
+
+
+# --------------------------------------------------------------------------- #
+# Rule: structured quiz — the Assessment Engine must emit a parseable JSON       #
+# question bank (with answer keys) that meets the requested per-tier counts.     #
+# --------------------------------------------------------------------------- #
+QUIZ_TYPES = {"mcq", "cloze", "short", "essay"}
+# Map the JSON tier label -> the config.yaml count key.
+_TIER_TO_COUNT = {
+    "Beginner": "beginner",
+    "Intermediate": "intermediate",
+    "Interleaved": "interleaved",
+    "Advanced": "essays",
+}
+
+
+def parse_quiz_json(text: str) -> dict | None:
+    """Extract the quiz JSON object, tolerating ```json fences or stray prose."""
+    t = text.strip()
+    fence = re.search(r"```(?:json)?\s*(\{.*\})\s*```", t, re.DOTALL)
+    if fence:
+        t = fence.group(1)
+    else:
+        start, end = t.find("{"), t.rfind("}")
+        if start != -1 and end > start:
+            t = t[start:end + 1]
+    try:
+        data = json.loads(t)
+    except (json.JSONDecodeError, ValueError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def valid_quiz_json(expected: dict, interleave_enabled: bool) -> Validator:
+    """Return a validator enforcing quiz JSON shape, answer keys, and tier counts.
+
+    `expected` is the per-tier target counts (config.yaml: beginner/intermediate/
+    interleaved/essays). Counts use a 60% floor so the model has slack but real
+    shortfalls (e.g. the old "3 questions" bug) are still re-prompted.
+    """
+    def _check(text: str) -> tuple[bool, str]:
+        data = parse_quiz_json(text)
+        if data is None:
+            return False, (
+                'Quiz must be ONE valid JSON object {"week":..., "questions":[...]}. '
+                "Output only JSON — no prose, no markdown, no code fences."
+            )
+        questions = data.get("questions")
+        if not isinstance(questions, list) or not questions:
+            return False, 'The JSON must contain a non-empty "questions" array.'
+
+        for i, q in enumerate(questions):
+            if not isinstance(q, dict):
+                return False, f"questions[{i}] must be a JSON object."
+            qtype = q.get("type")
+            ident = q.get("id", i)
+            if qtype not in QUIZ_TYPES:
+                return False, (
+                    f'questions[{i}].type must be one of {sorted(QUIZ_TYPES)}; got {qtype!r}.'
+                )
+            if not str(q.get("prompt", "")).strip():
+                return False, f'Question {ident} is missing a non-empty "prompt".'
+            if qtype == "mcq" and (not q.get("options") or not str(q.get("answer", "")).strip()):
+                return False, f'mcq question {ident} needs "options" and a correct "answer" letter.'
+            if qtype == "cloze" and not q.get("answers"):
+                return False, f'cloze question {ident} needs a non-empty "answers" list.'
+            if qtype == "short" and not str(q.get("answer", "")).strip():
+                return False, f'short question {ident} needs a model "answer".'
+
+        counts: dict[str, int] = {}
+        for q in questions:
+            counts[q.get("tier")] = counts.get(q.get("tier"), 0) + 1
+
+        for tier, key in _TIER_TO_COUNT.items():
+            if key == "interleaved" and not interleave_enabled:
+                continue
+            want = int(expected.get(key, 0) or 0)
+            if want <= 0:
+                continue
+            floor = max(1, int(want * 0.6))
+            got = counts.get(tier, 0)
+            if got < floor:
+                return False, (
+                    f"Tier '{tier}' has only {got} question(s); generate about {want} "
+                    f"(at least {floor}). The format is a template — these counts are the target."
+                )
+
+        if interleave_enabled and counts.get("Interleaved", 0) == 0:
+            return False, (
+                'Include Interleaved review questions ("tier":"Interleaved") drawn from prior '
+                "weeks' material to force long-term retention; none were found."
+            )
+        return True, ""
+
     return _check
 
 

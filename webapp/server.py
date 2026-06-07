@@ -318,6 +318,7 @@ async def quiz(payload: dict) -> JSONResponse:
     return JSONResponse({
         "week": week,
         "quiz": result.quiz_path.name,
+        "spec": result.spec_path.name,
         "answers": result.answers_path.name,
         "interleaved": result.interleaved,
     })
@@ -406,6 +407,53 @@ async def feynman_ws(ws: WebSocket, week: int) -> None:
     except WebSocketDisconnect:
         # Save what we have so the session isn't lost.
         await asyncio.to_thread(agent.finish, convo, week, diag)
+    except LLMError as exc:
+        await ws.send_json({"role": "error", "text": str(exc)})
+        await ws.close()
+
+
+# ----------------------------------------------------------- socrates (debate)
+@app.websocket("/ws/socrates/{week}")
+async def socrates_ws(ws: WebSocket, week: int) -> None:
+    from agents.socratic_dismantler import SocraticDismantler
+
+    await ws.accept()
+    agent = SocraticDismantler(settings, router)
+    diag = diagnostic()
+    wdir = get_library().week_dir(week)
+    essay_path = wdir / "Essay.md"
+    critique_path = wdir / "Critique.md"
+    convo: list[dict] = []
+    try:
+        if not essay_path.exists() or not essay_path.read_text(encoding="utf-8").strip():
+            await ws.send_json({"role": "error", "text": (
+                "Write and save your essay (Quiz tab → Advanced essay) before debating Socrates."
+            )})
+            await ws.close()
+            return
+        # The debate opens with the critique; generate it on the fly if absent.
+        if not critique_path.exists():
+            await ws.send_json({"role": "sys", "text": "Preparing the critique…"})
+            await asyncio.to_thread(agent.review, essay_path, week, diag)
+
+        convo, opening = await asyncio.to_thread(
+            agent.open_debate, essay_path, critique_path, week
+        )
+        await ws.send_json({"role": "socrates", "text": opening})
+
+        while True:
+            msg = await ws.receive_text()
+            if agent.is_end_command(msg):
+                break
+            reply = await asyncio.to_thread(agent.respond, convo, msg)
+            await ws.send_json({"role": "socrates", "text": reply})
+
+        summary = await asyncio.to_thread(agent.finish, convo, week, diag)
+        await ws.send_json({"role": "summary", "text": summary})
+        await ws.close()
+    except WebSocketDisconnect:
+        if convo:
+            await asyncio.to_thread(agent.finish, convo, week, diag)
     except LLMError as exc:
         await ws.send_json({"role": "error", "text": str(exc)})
         await ws.close()

@@ -2,9 +2,14 @@
 
 Parses a week's bilingual PDFs and synthesizes three tiered Markdown files
 (Beginner / Intermediate / Advanced), each enforcing the pedagogical rules via
-the shared validate-and-retry loop. Slide text AND a capped sample of rendered
-page-images are sent to the vision-capable API model, because Korean slide text
-often does not extract cleanly.
+the shared validate-and-retry loop.
+
+These decks are mostly *images of text*, so `core.pdf_parser` OCRs (Tesseract,
+kor+eng) any page whose embedded text layer is sparse — without that, the
+text-only gpt-oss backend would be blind to them. Each source deck is synthesized
+**separately** and the per-source sections are concatenated into one tier file, so
+a week holding two different topics (e.g. Programming Languages + Computer
+Networks) never drops one of them.
 """
 from __future__ import annotations
 
@@ -42,18 +47,22 @@ class IngestionAgent(BaseAgent):
         super().__init__(
             "ingestion", settings, router, system_prompt_file="ingestion.md"
         )
-        self.max_images = int(self.route.extras.get("max_images", 10))
+        extras = self.route.extras
+        self.ocr = bool(extras.get("ocr", True))
+        self.ocr_langs = str(extras.get("ocr_langs", "kor+eng"))
+        self.ocr_min_chars = int(extras.get("ocr_min_chars", 40))
+        self.max_tokens = int(extras.get("max_tokens", 12000))
 
     def ingest_week(self, week_dir: Path, week: int) -> dict[str, Path]:
         """Parse PDFs and synthesize the three tier files. Returns {tier: path}."""
-        parsed = parse_week_inputs(week_dir / "input", week_dir / "assets")
+        parsed = parse_week_inputs(
+            week_dir / "input", week_dir / "assets",
+            ocr=self.ocr, ocr_langs=self.ocr_langs, ocr_min_chars=self.ocr_min_chars,
+        )
         if not parsed:
             raise FileNotFoundError(
                 f"No PDFs in {week_dir / 'input'}. Drop the weekly slides there first."
             )
-
-        slide_text = self._combine_text(parsed)
-        images = self._sample_images(parsed)
 
         outputs: dict[str, Path] = {}
         for tier, guidance in TIERS.items():
@@ -62,36 +71,43 @@ class IngestionAgent(BaseAgent):
                 .replace("{{TIER}}", tier)
                 .replace("{{TIER_GUIDANCE}}", guidance)
             )
-            user = {
-                "role": "user",
-                "content": (
-                    f"Here are this week's (Week {week}) lecture slides. The extracted text "
-                    f"may be imperfect for Korean — use the attached page images to disambiguate. "
-                    f"Synthesize the **{tier}** tier notes per your rules.\n\n"
-                    f"--- SLIDE TEXT ---\n{slide_text}\n--- END SLIDE TEXT ---"
-                ),
-            }
-            if images:
-                user["images"] = images
-
-            note = self.run_validated([user], SYNTHESIS_RULES, system=system, max_tokens=8192)
+            sections = [
+                self._synthesize_source(system, tier, week, p)
+                for p in parsed
+                if p.full_text.strip()
+            ]
             out_path = week_dir / f"{tier}.md"
-            out_path.write_text(note, encoding="utf-8")
+            out_path.write_text(self._assemble(tier, week, sections), encoding="utf-8")
             outputs[tier] = out_path
         return outputs
 
     # ----------------------------------------------------------------- helpers
-    @staticmethod
-    def _combine_text(parsed: list[ParsedPDF]) -> str:
-        parts = []
-        for p in parsed:
-            parts.append(f"### Source: {p.source.name}\n{p.full_text}")
-        return "\n\n".join(parts).strip() or "(no extractable text layer)"
+    def _synthesize_source(
+        self, system: str, tier: str, week: int, parsed: ParsedPDF
+    ) -> str:
+        """Synthesize one tier's notes for a SINGLE source deck."""
+        user = {
+            "role": "user",
+            "content": (
+                f"Below is the extracted/OCR'd text of ONE lecture deck "
+                f"('{parsed.source.name}') from Week {week}. The text comes from OCR of "
+                f"bilingual slides, so it may contain artifacts or odd line breaks — interpret it "
+                f"sensibly and correct obvious OCR errors. Synthesize the **{tier}** tier notes for "
+                f"THIS deck, covering EVERY distinct topic it contains. Do not omit sections.\n\n"
+                f"--- SLIDE TEXT ({parsed.source.name}) ---\n{parsed.full_text}\n--- END SLIDE TEXT ---"
+            ),
+        }
+        return self.run_validated(
+            [user], SYNTHESIS_RULES, system=system, max_tokens=self.max_tokens
+        ).strip()
 
-    def _sample_images(self, parsed: list[ParsedPDF]) -> list[Path]:
-        """Collect page images, evenly sampled down to self.max_images."""
-        all_imgs: list[Path] = [img for p in parsed for img in p.image_paths]
-        if len(all_imgs) <= self.max_images:
-            return all_imgs
-        step = len(all_imgs) / self.max_images
-        return [all_imgs[int(i * step)] for i in range(self.max_images)]
+    @staticmethod
+    def _assemble(tier: str, week: int, sections: list[str]) -> str:
+        """Join per-source sections into one tier file (one section per deck)."""
+        if not sections:
+            return (
+                f"# {tier} — Week {week:02d}\n\n"
+                "_No readable text could be extracted from the slides, even via OCR. "
+                "Re-scan the PDFs or provide a text-based deck, then re-ingest._\n"
+            )
+        return "\n\n---\n\n".join(sections) + "\n"
